@@ -1,4 +1,22 @@
-# Recon
+<p align="center">
+  <img src="Resources/AppIcon.appiconset/256.png" width="96">
+</p>
+
+<h1 align="center">Recon</h1>
+
+<p align="center">
+  <em>A macOS menu bar companion for Telepresence.</em>
+</p>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/macOS-14%2B-blue?logo=apple&logoColor=white" alt="macOS 14+">
+  <img src="https://img.shields.io/github/license/mehmetsecgin/Recon" alt="MIT License">
+  <img src="https://img.shields.io/github/v/release/mehmetsecgin/Recon?label=latest" alt="Latest Release">
+</p>
+
+<p align="center">
+  <img src="Resources/screenshot.png" width="360" alt="Recon menu bar popover">
+</p>
 
 Recon is a native macOS menu bar app for people who use Telepresence every day and are tired of babysitting it in Terminal.
 
