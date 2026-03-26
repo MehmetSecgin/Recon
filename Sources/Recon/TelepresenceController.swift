@@ -15,6 +15,7 @@ final class TelepresenceController: ObservableObject {
     private enum DefaultsKey {
         static let selectedKubeconfigPath = "Recon.SelectedKubeconfigPath"
         static let rememberedKubeconfigPaths = "Recon.RememberedKubeconfigPaths"
+        static let hasExplicitKubeconfigSelection = "Recon.HasExplicitKubeconfigSelection"
         static let pollingIntervalSeconds = "Recon.PollingIntervalSeconds"
         static let autoReconnectEnabled = "Recon.AutoReconnectEnabled"
         static let notificationsEnabled = "Recon.NotificationsEnabled"
@@ -48,6 +49,7 @@ final class TelepresenceController: ObservableObject {
     }
 
     @Published private(set) var snapshot = TelepresenceStatusSnapshot.busy("Checking Recon...")
+    @Published private(set) var targetMetadata = TargetMetadata.empty
     @Published private(set) var isRunningCommand = false
     @Published private(set) var isSwitchingKubeconfig = false
     @Published private(set) var kubeconfigOptions: [KubeconfigOption] = []
@@ -59,6 +61,15 @@ final class TelepresenceController: ObservableObject {
     @Published private(set) var isUpdatingLaunchAtLogin = false
     @Published var selectedKubeconfigPath: String?
     @Published private(set) var lastErrorText: String?
+
+    private let environmentResolver: CommandEnvironmentResolver
+    private let cli: TelepresenceCLI
+    private let targetResolver: KubeTargetResolver
+    private let defaults = UserDefaults.standard
+    private let fileManager = FileManager.default
+    private var pollingTask: Task<Void, Never>?
+    private var hasAttemptedAutoReconnectForCurrentDrop = false
+    private var userInitiatedDisconnect = false
 
     var statusItemTitle: String {
         switch snapshot.state {
@@ -75,36 +86,58 @@ final class TelepresenceController: ObservableObject {
         }
     }
 
-    var selectedKubeconfigDisplayName: String {
-        guard let selectedKubeconfigPath else {
-            return "No file selected"
-        }
-        return URL(fileURLWithPath: selectedKubeconfigPath).lastPathComponent
-    }
-
-    var hasMetadata: Bool {
-        metadataRows.isEmpty == false
-    }
-
-    var metadataRows: [(key: String, value: String)] {
-        [
-            ("context", snapshot.context),
-            ("connection", snapshot.connectionName),
-            ("namespace", snapshot.namespace)
-        ].compactMap { key, value in
-            guard let value, value.isEmpty == false else { return nil }
-            return (key, value)
+    var headerDetailText: String? {
+        switch snapshot.state {
+        case .connected:
+            return nil
+        case .busy:
+            return snapshot.detailText
+        case .disconnected, .unavailable, .error:
+            return lastErrorText ?? snapshot.detailText
         }
     }
 
-    private let cli = TelepresenceCLI()
-    private let defaults = UserDefaults.standard
-    private let fileManager = FileManager.default
-    private var pollingTask: Task<Void, Never>?
-    private var hasAttemptedAutoReconnectForCurrentDrop = false
-    private var userInitiatedDisconnect = false
+    var shouldShowTimestamp: Bool {
+        snapshot.state != .busy
+    }
+
+    var kubeconfigPickerLabel: String {
+        if let selectedKubeconfigPath {
+            return URL(fileURLWithPath: selectedKubeconfigPath).lastPathComponent
+        }
+
+        switch targetMetadata.kubeconfigMode {
+        case .inheritedMultiple(let count):
+            return "Inherited (\(count) files)"
+        case .inheritedSingle:
+            return "Follow $KUBECONFIG"
+        case .default:
+            return "Default kubeconfig"
+        case .pinned:
+            return targetMetadata.kubeconfigDisplay
+        case .unresolved:
+            return "Choose source"
+        }
+    }
+
+    var displayKubeconfig: String {
+        targetMetadata.kubeconfigDisplay
+    }
+
+    var displayContext: String {
+        targetMetadata.context ?? "\u{2014}"
+    }
+
+    var displayNamespace: String {
+        targetMetadata.namespace ?? "\u{2014}"
+    }
 
     init() {
+        let environmentResolver = CommandEnvironmentResolver()
+        self.environmentResolver = environmentResolver
+        cli = TelepresenceCLI(environmentResolver: environmentResolver)
+        targetResolver = KubeTargetResolver(environmentResolver: environmentResolver)
+
         let storedInterval = defaults.object(forKey: DefaultsKey.pollingIntervalSeconds) as? Int
         selectedPollingInterval = PollingIntervalOption(rawValue: storedInterval ?? PollingIntervalOption.fiveMinutes.rawValue)
             ?? .fiveMinutes
@@ -223,45 +256,54 @@ final class TelepresenceController: ObservableObject {
         mergeKubeconfigOptions(with: siblingPaths + [normalizedPath])
         persistKubeconfigOptions()
 
-        if selectedKubeconfigPath == normalizedPath {
-            return
-        }
-
         selectedKubeconfigPath = normalizedPath
         persistSelectedKubeconfigPath()
+        targetMetadata = TargetMetadata(
+            kubeconfigDisplay: NSString(string: normalizedPath).abbreviatingWithTildeInPath,
+            kubeconfigMode: .pinned,
+            context: targetMetadata.context,
+            namespace: targetMetadata.namespace,
+            isLastKnown: true,
+            resolutionError: nil
+        )
 
-        Task {
-            await cli.setKubeconfigPath(normalizedPath)
-        }
-
+        userInitiatedDisconnect = false
         runCommand(
             busyMessage: "Switching kubeconfig and reconnecting...",
             switchingKubeconfig: true
         ) { cli in
-            await cli.reconnect()
+            await self.environmentResolver.setPinnedKubeconfigPath(normalizedPath)
+            return await cli.reconnect()
         }
     }
 
     private func loadKubeconfigOptions() async {
         let discoveredPaths = scanDefaultKubeconfigDirectory()
         let rememberedPaths = loadRememberedKubeconfigPaths()
-        let resolvedPath = await cli.currentKubeconfigPath().map(normalizePath)
+        let resolvedPaths = await environmentResolver.resolvedKubeconfigPaths()
 
-        mergeKubeconfigOptions(with: discoveredPaths + rememberedPaths + [resolvedPath].compactMap { $0 })
+        mergeKubeconfigOptions(with: discoveredPaths + rememberedPaths + resolvedPaths)
 
         let savedSelection = defaults.string(forKey: DefaultsKey.selectedKubeconfigPath).map(normalizePath)
-        let fallbackSelection = savedSelection
-            .flatMap(existingOptionPath(matching:))
-            ?? resolvedPath
-            ?? kubeconfigOptions.first?.path
+        let hasExplicitSelection = defaults.object(forKey: DefaultsKey.hasExplicitKubeconfigSelection) as? Bool ?? false
 
-        if let fallbackSelection {
-            selectedKubeconfigPath = fallbackSelection
-            persistSelectedKubeconfigPath()
-            await cli.setKubeconfigPath(fallbackSelection)
+        let shouldTreatSavedSelectionAsPinned: Bool
+        if hasExplicitSelection {
+            shouldTreatSavedSelectionAsPinned = true
+        } else if let savedSelection {
+            shouldTreatSavedSelectionAsPinned = resolvedPaths.contains(savedSelection) == false
+        } else {
+            shouldTreatSavedSelectionAsPinned = false
         }
 
+        selectedKubeconfigPath = shouldTreatSavedSelectionAsPinned
+            ? savedSelection.flatMap(existingOptionPath(matching:))
+            : nil
+
+        await environmentResolver.setPinnedKubeconfigPath(selectedKubeconfigPath)
+        persistSelectedKubeconfigPath()
         persistKubeconfigOptions()
+        await refreshTargetMetadata()
     }
 
     private func startPolling() {
@@ -317,6 +359,7 @@ final class TelepresenceController: ObservableObject {
         let previousState = snapshot.state
         let updatedSnapshot = await cli.fetchStatus()
         snapshot = updatedSnapshot
+        await refreshTargetMetadata()
 
         if updatedSnapshot.state == .connected {
             hasAttemptedAutoReconnectForCurrentDrop = false
@@ -343,11 +386,27 @@ final class TelepresenceController: ObservableObject {
         }
     }
 
+    private func refreshTargetMetadata() async {
+        let resolvedMetadata = await targetResolver.resolveTargetMetadata()
+        let shouldDimMetadata = snapshot.state != .connected || resolvedMetadata.resolutionError != nil
+
+        let mergedContext = resolvedMetadata.context ?? targetMetadata.context
+        let mergedNamespace = resolvedMetadata.namespace ?? targetMetadata.namespace
+
+        targetMetadata = resolvedMetadata.applying(
+            context: mergedContext,
+            namespace: mergedNamespace,
+            isLastKnown: shouldDimMetadata,
+            resolutionError: resolvedMetadata.resolutionError
+        )
+    }
+
     private func performAutoConnectOnLaunchIfNeeded() async {
         guard autoConnectOnLaunchEnabled else { return }
 
         let initialSnapshot = await cli.fetchStatus()
         snapshot = initialSnapshot
+        await refreshTargetMetadata()
 
         guard initialSnapshot.state == .disconnected || initialSnapshot.state == .error else {
             return
@@ -443,7 +502,13 @@ final class TelepresenceController: ObservableObject {
     }
 
     private func persistSelectedKubeconfigPath() {
-        defaults.set(selectedKubeconfigPath, forKey: DefaultsKey.selectedKubeconfigPath)
+        if let selectedKubeconfigPath {
+            defaults.set(selectedKubeconfigPath, forKey: DefaultsKey.selectedKubeconfigPath)
+            defaults.set(true, forKey: DefaultsKey.hasExplicitKubeconfigSelection)
+        } else {
+            defaults.removeObject(forKey: DefaultsKey.selectedKubeconfigPath)
+            defaults.set(false, forKey: DefaultsKey.hasExplicitKubeconfigSelection)
+        }
     }
 
     private func normalizePath(_ path: String) -> String {

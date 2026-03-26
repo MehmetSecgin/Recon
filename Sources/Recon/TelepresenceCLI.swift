@@ -19,9 +19,6 @@ struct TelepresenceStatusSnapshot {
     let state: State
     let statusText: String
     let detailText: String
-    let context: String?
-    let connectionName: String?
-    let namespace: String?
     let lastUpdated: Date
 
     static func busy(_ detailText: String) -> TelepresenceStatusSnapshot {
@@ -29,9 +26,6 @@ struct TelepresenceStatusSnapshot {
             state: .busy,
             statusText: "Working",
             detailText: detailText,
-            context: nil,
-            connectionName: nil,
-            namespace: nil,
             lastUpdated: .now
         )
     }
@@ -51,65 +45,35 @@ actor TelepresenceCLI {
     private struct UserDaemonStatus: Decodable {
         let running: Bool?
         let status: String?
-        let kubernetes_context: String?
-        let connection_name: String?
-        let namespace: String?
     }
 
-    private struct CommandResult {
-        let exitCode: Int32
-        let stdout: String
-        let stderr: String
+    private let environmentResolver: CommandEnvironmentResolver
 
-        var combinedOutput: String {
-            [stdout, stderr]
-                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-                .filter { !$0.isEmpty }
-                .joined(separator: "\n")
-        }
+    init(environmentResolver: CommandEnvironmentResolver = CommandEnvironmentResolver()) {
+        self.environmentResolver = environmentResolver
     }
 
-    private enum ShellCommand {
-        case loginEnvironment
-    }
-
-    private var cachedKubeconfig: String?
-    private var cachedShellPath: String?
-
-    func currentKubeconfigPath() async -> String? {
-        await resolvedKubeconfig()
-    }
-
-    func setKubeconfigPath(_ path: String?) {
-        let normalizedPath = path?.trimmingCharacters(in: .whitespacesAndNewlines)
-        cachedKubeconfig = normalizedPath?.isEmpty == false ? normalizedPath : nil
-
-        if let cachedKubeconfig {
-            setenv("KUBECONFIG", cachedKubeconfig, 1)
-        } else {
-            unsetenv("KUBECONFIG")
-        }
+    func setKubeconfigPath(_ path: String?) async {
+        await environmentResolver.setPinnedKubeconfigPath(path)
     }
 
     func fetchStatus() async -> TelepresenceStatusSnapshot {
-        guard let executable = resolveExecutable() else {
+        guard let executable = await resolveExecutable() else {
             return TelepresenceStatusSnapshot(
                 state: .unavailable,
                 statusText: "Telepresence not found",
                 detailText: "Install Telepresence or set TELEPRESENCE_PATH.",
-                context: nil,
-                connectionName: nil,
-                namespace: nil,
                 lastUpdated: .now
             )
         }
 
         do {
-            let result = try await runProcess(
+            let result = try await ProcessRunner.run(
                 executable: executable,
                 arguments: ["status", "--output", "json"],
-                environment: await executionEnvironment()
+                environment: await environmentResolver.executionEnvironment()
             )
+
             guard result.exitCode == 0 else {
                 return makeDisconnectedSnapshot(output: result.combinedOutput)
             }
@@ -119,10 +83,8 @@ actor TelepresenceCLI {
                 return makeDisconnectedSnapshot(output: result.combinedOutput)
             }
 
-            let data = Data(stdout.utf8)
-            let response = try JSONDecoder().decode(StatusResponse.self, from: data)
-            let userDaemon = response.user_daemon
-            let stateText = userDaemon?.status ?? "Disconnected"
+            let response = try JSONDecoder().decode(StatusResponse.self, from: Data(stdout.utf8))
+            let stateText = response.user_daemon?.status ?? "Disconnected"
             let normalizedStatus = stateText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
             let isConnected = normalizedStatus == "connected" || normalizedStatus.hasPrefix("connected ")
             let state: TelepresenceStatusSnapshot.State = isConnected ? .connected : .disconnected
@@ -130,7 +92,7 @@ actor TelepresenceCLI {
 
             if state == .connected {
                 detailText = "Connected"
-            } else if userDaemon?.running == true || response.root_daemon?.running == true {
+            } else if response.user_daemon?.running == true || response.root_daemon?.running == true {
                 detailText = "Daemons are running, but there is no active cluster connection."
             } else {
                 detailText = "Telepresence is not connected."
@@ -140,9 +102,6 @@ actor TelepresenceCLI {
                 state: state,
                 statusText: stateText,
                 detailText: detailText,
-                context: userDaemon?.kubernetes_context,
-                connectionName: userDaemon?.connection_name,
-                namespace: userDaemon?.namespace,
                 lastUpdated: .now
             )
         } catch {
@@ -150,9 +109,6 @@ actor TelepresenceCLI {
                 state: .error,
                 statusText: "Status check failed",
                 detailText: error.localizedDescription,
-                context: nil,
-                connectionName: nil,
-                namespace: nil,
                 lastUpdated: .now
             )
         }
@@ -164,7 +120,7 @@ actor TelepresenceCLI {
     }
 
     func reconnect() async -> CommandOutcome {
-        guard let executable = resolveExecutable() else {
+        guard let executable = await resolveExecutable() else {
             return CommandOutcome(
                 success: false,
                 summary: "Telepresence executable was not found.",
@@ -174,12 +130,13 @@ actor TelepresenceCLI {
         }
 
         do {
-            let environment = await executionEnvironment()
-            let quitResult = try await runProcess(
+            let environment = await environmentResolver.executionEnvironment()
+            let quitResult = try await ProcessRunner.run(
                 executable: executable,
                 arguments: ["quit", "--stop-daemons"],
                 environment: environment
             )
+
             if quitResult.exitCode != 0 {
                 let output = quitResult.combinedOutput
                 if !output.lowercased().contains("not") {
@@ -192,11 +149,12 @@ actor TelepresenceCLI {
                 }
             }
 
-            let connectResult = try await runProcess(
+            let connectResult = try await ProcessRunner.run(
                 executable: executable,
                 arguments: await connectArguments(),
                 environment: environment
             )
+
             guard connectResult.exitCode == 0 else {
                 return makeFailureOutcome(
                     summary: "Reconnect failed.",
@@ -234,16 +192,17 @@ actor TelepresenceCLI {
     }
 
     private func currentKubernetesContext() async -> String? {
-        guard let kubectl = resolveKubectlExecutable() else {
+        guard let kubectl = await resolveKubectlExecutable() else {
             return nil
         }
 
         do {
-            let result = try await runProcess(
+            let result = try await ProcessRunner.run(
                 executable: kubectl,
                 arguments: ["config", "current-context"],
-                environment: await executionEnvironment()
+                environment: await environmentResolver.executionEnvironment()
             )
+
             guard result.exitCode == 0 else {
                 return nil
             }
@@ -255,7 +214,7 @@ actor TelepresenceCLI {
     }
 
     private func runCommand(arguments: [String], successSummary: String) async -> CommandOutcome {
-        guard let executable = resolveExecutable() else {
+        guard let executable = await resolveExecutable() else {
             return CommandOutcome(
                 success: false,
                 summary: "Telepresence executable was not found.",
@@ -265,11 +224,12 @@ actor TelepresenceCLI {
         }
 
         do {
-            let result = try await runProcess(
+            let result = try await ProcessRunner.run(
                 executable: executable,
                 arguments: arguments,
-                environment: await executionEnvironment()
+                environment: await environmentResolver.executionEnvironment()
             )
+
             guard result.exitCode == 0 else {
                 return makeFailureOutcome(
                     summary: "Telepresence \(arguments.joined(separator: " ")) failed.",
@@ -294,7 +254,7 @@ actor TelepresenceCLI {
         }
     }
 
-    private func makeFailureOutcome(summary: String, fallbackVerb: String, result: CommandResult) -> CommandOutcome {
+    private func makeFailureOutcome(summary: String, fallbackVerb: String, result: ProcessOutput) -> CommandOutcome {
         let output = result.combinedOutput
         let details = summarizeFailureOutput(output).nilIfEmpty ?? "The \(fallbackVerb) command exited with code \(result.exitCode)."
         return CommandOutcome(
@@ -360,121 +320,8 @@ actor TelepresenceCLI {
         }
     }
 
-    private func runProcess(
-        executable: String,
-        arguments: [String],
-        environment: [String: String]? = nil
-    ) async throws -> CommandResult {
-        let process = Process()
-        let stdoutPipe = Pipe()
-        let stderrPipe = Pipe()
-
-        process.executableURL = URL(fileURLWithPath: executable)
-        process.arguments = arguments
-        if let environment {
-            process.environment = environment
-        }
-        process.standardOutput = stdoutPipe
-        process.standardError = stderrPipe
-
-        async let stdoutRead = stdoutPipe.fileHandleForReading.readToEnd()
-        async let stderrRead = stderrPipe.fileHandleForReading.readToEnd()
-        try process.run()
-        let terminationStatus = await withCheckedContinuation { continuation in
-            DispatchQueue.global(qos: .utility).async {
-                process.waitUntilExit()
-                continuation.resume(returning: process.terminationStatus)
-            }
-        }
-        let stdoutData = try await stdoutRead ?? Data()
-        let stderrData = try await stderrRead ?? Data()
-        let stdout = String(decoding: stdoutData, as: UTF8.self)
-        let stderr = String(decoding: stderrData, as: UTF8.self)
-
-        return CommandResult(
-            exitCode: terminationStatus,
-            stdout: stdout,
-            stderr: stderr
-        )
-    }
-
-    private func executionEnvironment() async -> [String: String] {
-        var environment = ProcessInfo.processInfo.environment
-
-        if let shellPath = await resolvedShellPath() {
-            environment["PATH"] = shellPath
-        }
-
-        if let kubeconfig = await resolvedKubeconfig() {
-            environment["KUBECONFIG"] = kubeconfig
-        }
-
-        return environment
-    }
-
-    private func resolvedKubeconfig() async -> String? {
-        if let cachedKubeconfig {
-            return cachedKubeconfig
-        }
-
-        if let kubeconfig = ProcessInfo.processInfo.environment["KUBECONFIG"]?.nilIfEmpty {
-            cachedKubeconfig = kubeconfig
-            return kubeconfig
-        }
-
-        if let shellKubeconfig = await loginShellEnvironmentValue(named: "KUBECONFIG")?.nilIfEmpty {
-            cachedKubeconfig = shellKubeconfig
-            return shellKubeconfig
-        }
-
-        let defaultKubeconfig = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".kube/config")
-            .path
-
-        if FileManager.default.fileExists(atPath: defaultKubeconfig) {
-            cachedKubeconfig = defaultKubeconfig
-            return defaultKubeconfig
-        }
-
-        return nil
-    }
-
-    private func resolvedShellPath() async -> String? {
-        if let cachedShellPath {
-            return cachedShellPath
-        }
-
-        if let shellPath = await loginShellEnvironmentValue(named: "PATH")?.nilIfEmpty {
-            cachedShellPath = shellPath
-            return shellPath
-        }
-
-        return ProcessInfo.processInfo.environment["PATH"]?.nilIfEmpty
-    }
-
-    private func loginShellEnvironmentValue(named name: String) async -> String? {
-        do {
-            let shell = ProcessInfo.processInfo.environment["SHELL"]?.nilIfEmpty ?? "/bin/zsh"
-            let result = try await runProcess(
-                executable: shell,
-                arguments: shellCommandArguments(for: .loginEnvironment)
-            )
-            guard result.exitCode == 0 else {
-                return nil
-            }
-
-            return result.stdout
-                .components(separatedBy: .newlines)
-                .first(where: { $0.hasPrefix("\(name)=") })?
-                .dropFirst(name.count + 1)
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-        } catch {
-            return nil
-        }
-    }
-
-    private func resolveExecutable() -> String? {
-        resolveExecutable(
+    private func resolveExecutable() async -> String? {
+        await environmentResolver.resolveExecutable(
             named: "telepresence",
             envKey: "TELEPRESENCE_PATH",
             wellKnownPaths: [
@@ -485,8 +332,8 @@ actor TelepresenceCLI {
         )
     }
 
-    private func resolveKubectlExecutable() -> String? {
-        resolveExecutable(
+    private func resolveKubectlExecutable() async -> String? {
+        await environmentResolver.resolveExecutable(
             named: "kubectl",
             envKey: "KUBECTL_PATH",
             wellKnownPaths: [
@@ -497,36 +344,6 @@ actor TelepresenceCLI {
         )
     }
 
-    private func resolveExecutable(named name: String, envKey: String, wellKnownPaths: [String]) -> String? {
-        let fileManager = FileManager.default
-        let candidates = ([ProcessInfo.processInfo.environment[envKey]] + wellKnownPaths)
-            .compactMap { $0 }
-
-        for candidate in candidates where fileManager.isExecutableFile(atPath: candidate) {
-            return candidate
-        }
-
-        let pathEntries = (ProcessInfo.processInfo.environment["PATH"] ?? "")
-            .split(separator: ":")
-            .map(String.init)
-
-        for directory in pathEntries {
-            let candidate = URL(fileURLWithPath: directory).appendingPathComponent(name).path
-            if fileManager.isExecutableFile(atPath: candidate) {
-                return candidate
-            }
-        }
-
-        return nil
-    }
-
-    private func shellCommandArguments(for command: ShellCommand) -> [String] {
-        switch command {
-        case .loginEnvironment:
-            return ["-lc", "env"]
-        }
-    }
-
     private func makeDisconnectedSnapshot(output: String) -> TelepresenceStatusSnapshot {
         let normalized = output.trimmingCharacters(in: .whitespacesAndNewlines)
         let detail = normalized.isEmpty ? "Telepresence is not connected." : normalized
@@ -535,17 +352,7 @@ actor TelepresenceCLI {
             state: .disconnected,
             statusText: "Disconnected",
             detailText: detail,
-            context: nil,
-            connectionName: nil,
-            namespace: nil,
             lastUpdated: .now
         )
-    }
-}
-
-private extension String {
-    var nilIfEmpty: String? {
-        let trimmed = trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? nil : trimmed
     }
 }
