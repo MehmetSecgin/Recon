@@ -64,6 +64,8 @@ private struct ReconMenuView: View {
         .padding(16)
         .frame(width: 340, alignment: .leading)
         .tint(.gray)
+        .background(MenuWindowConfigurator())
+        .preferredColorScheme(.dark)
         .onAppear {
             controller.refreshNow()
         }
@@ -335,5 +337,26 @@ private extension Color {
             green: Double((hex >> 8) & 0xFF) / 255.0,
             blue: Double(hex & 0xFF) / 255.0
         )
+    }
+}
+
+private struct MenuWindowConfigurator: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView(frame: .zero)
+        configureWindow(for: view)
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        configureWindow(for: nsView)
+    }
+
+    private func configureWindow(for view: NSView) {
+        DispatchQueue.main.async {
+            guard let window = view.window else { return }
+            window.appearance = NSAppearance(named: .darkAqua)
+            window.isOpaque = false
+            window.backgroundColor = NSColor(calibratedWhite: 0.08, alpha: 0.98)
+        }
     }
 }
