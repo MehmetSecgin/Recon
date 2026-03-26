@@ -1,0 +1,402 @@
+import Combine
+import Foundation
+import ServiceManagement
+
+struct KubeconfigOption: Identifiable, Hashable {
+    let path: String
+
+    var id: String { path }
+    var displayName: String { URL(fileURLWithPath: path).lastPathComponent }
+}
+
+@MainActor
+final class TelepresenceController: ObservableObject {
+    private enum DefaultsKey {
+        static let selectedKubeconfigPath = "Recon.SelectedKubeconfigPath"
+        static let rememberedKubeconfigPaths = "Recon.RememberedKubeconfigPaths"
+        static let pollingIntervalSeconds = "Recon.PollingIntervalSeconds"
+        static let autoReconnectEnabled = "Recon.AutoReconnectEnabled"
+    }
+
+    enum PollingIntervalOption: Int, CaseIterable, Identifiable {
+        case oneMinute = 60
+        case fiveMinutes = 300
+        case fifteenMinutes = 900
+        case thirtyMinutes = 1800
+
+        var id: Int { rawValue }
+
+        var title: String {
+            switch self {
+            case .oneMinute:
+                return "1 minute"
+            case .fiveMinutes:
+                return "5 minutes"
+            case .fifteenMinutes:
+                return "15 minutes"
+            case .thirtyMinutes:
+                return "30 minutes"
+            }
+        }
+
+        var duration: Duration {
+            .seconds(rawValue)
+        }
+    }
+
+    @Published private(set) var snapshot = TelepresenceStatusSnapshot.busy("Checking Recon...")
+    @Published private(set) var isRunningCommand = false
+    @Published private(set) var isSwitchingKubeconfig = false
+    @Published private(set) var kubeconfigOptions: [KubeconfigOption] = []
+    @Published private(set) var selectedPollingInterval: PollingIntervalOption
+    @Published private(set) var autoReconnectEnabled: Bool
+    @Published private(set) var isLaunchAtLoginEnabled = false
+    @Published private(set) var isUpdatingLaunchAtLogin = false
+    @Published var selectedKubeconfigPath: String?
+    @Published private(set) var lastErrorText: String?
+
+    var statusItemTitle: String {
+        switch snapshot.state {
+        case .connected:
+            return "R●"
+        case .busy:
+            return "R⋯"
+        case .disconnected:
+            return "R○"
+        case .unavailable:
+            return "R–"
+        case .error:
+            return "R!"
+        }
+    }
+
+    var selectedKubeconfigDisplayName: String {
+        guard let selectedKubeconfigPath else {
+            return "No file selected"
+        }
+        return URL(fileURLWithPath: selectedKubeconfigPath).lastPathComponent
+    }
+
+    var hasMetadata: Bool {
+        metadataRows.isEmpty == false
+    }
+
+    var metadataRows: [(key: String, value: String)] {
+        [
+            ("context", snapshot.context),
+            ("connection", snapshot.connectionName),
+            ("namespace", snapshot.namespace)
+        ].compactMap { key, value in
+            guard let value, value.isEmpty == false else { return nil }
+            return (key, value)
+        }
+    }
+
+    private let cli = TelepresenceCLI()
+    private let defaults = UserDefaults.standard
+    private let fileManager = FileManager.default
+    private var pollingTask: Task<Void, Never>?
+    private var hasAttemptedAutoReconnectForCurrentDrop = false
+
+    init() {
+        let storedInterval = defaults.object(forKey: DefaultsKey.pollingIntervalSeconds) as? Int
+        selectedPollingInterval = PollingIntervalOption(rawValue: storedInterval ?? PollingIntervalOption.fiveMinutes.rawValue)
+            ?? .fiveMinutes
+        autoReconnectEnabled = defaults.object(forKey: DefaultsKey.autoReconnectEnabled) as? Bool ?? false
+
+        Task { [weak self] in
+            guard let self else { return }
+            self.refreshLaunchAtLoginState()
+            await self.loadKubeconfigOptions()
+            self.startPolling()
+        }
+    }
+
+    deinit {
+        pollingTask?.cancel()
+    }
+
+    func connect() {
+        runCommand(busyMessage: "Connecting to Telepresence...") { cli in
+            await cli.connect()
+        }
+    }
+
+    func reconnect() {
+        runCommand(busyMessage: "Restarting Telepresence...") { cli in
+            await cli.reconnect()
+        }
+    }
+
+    func refreshNow() {
+        Task {
+            await refreshStatus()
+        }
+    }
+
+    func setPollingInterval(seconds: Int) {
+        let nextInterval = PollingIntervalOption(rawValue: seconds) ?? .fiveMinutes
+        guard selectedPollingInterval != nextInterval else { return }
+
+        selectedPollingInterval = nextInterval
+        defaults.set(nextInterval.rawValue, forKey: DefaultsKey.pollingIntervalSeconds)
+        restartPolling()
+    }
+
+    func setAutoReconnectEnabled(_ enabled: Bool) {
+        guard autoReconnectEnabled != enabled else { return }
+        autoReconnectEnabled = enabled
+        defaults.set(enabled, forKey: DefaultsKey.autoReconnectEnabled)
+    }
+
+    func setLaunchAtLoginEnabled(_ enabled: Bool) {
+        guard !isUpdatingLaunchAtLogin else { return }
+
+        isUpdatingLaunchAtLogin = true
+
+        Task {
+            do {
+                try LaunchAtLoginManager.setEnabled(enabled)
+                refreshLaunchAtLoginState()
+            } catch {
+                lastErrorText = "Could not update launch at login: \(error.localizedDescription)"
+                refreshLaunchAtLoginState()
+            }
+
+            isUpdatingLaunchAtLogin = false
+        }
+    }
+
+    func addAndSelectKubeconfig(path: String) {
+        let normalizedPath = normalizePath(path)
+        guard fileManager.fileExists(atPath: normalizedPath) else { return }
+
+        let siblingPaths = scanKubeconfigFiles(in: URL(fileURLWithPath: normalizedPath).deletingLastPathComponent())
+        mergeKubeconfigOptions(with: siblingPaths + [normalizedPath])
+        persistKubeconfigOptions()
+
+        if selectedKubeconfigPath == normalizedPath {
+            return
+        }
+
+        selectedKubeconfigPath = normalizedPath
+        persistSelectedKubeconfigPath()
+
+        Task {
+            await cli.setKubeconfigPath(normalizedPath)
+        }
+
+        runCommand(
+            busyMessage: "Switching kubeconfig and reconnecting...",
+            switchingKubeconfig: true
+        ) { cli in
+            await cli.reconnect()
+        }
+    }
+
+    private func loadKubeconfigOptions() async {
+        let discoveredPaths = scanDefaultKubeconfigDirectory()
+        let rememberedPaths = loadRememberedKubeconfigPaths()
+        let resolvedPath = await cli.currentKubeconfigPath().map(normalizePath)
+
+        mergeKubeconfigOptions(with: discoveredPaths + rememberedPaths + [resolvedPath].compactMap { $0 })
+
+        let savedSelection = defaults.string(forKey: DefaultsKey.selectedKubeconfigPath).map(normalizePath)
+        let fallbackSelection = savedSelection
+            .flatMap(existingOptionPath(matching:))
+            ?? resolvedPath
+            ?? kubeconfigOptions.first?.path
+
+        if let fallbackSelection {
+            selectedKubeconfigPath = fallbackSelection
+            persistSelectedKubeconfigPath()
+            await cli.setKubeconfigPath(fallbackSelection)
+        }
+
+        persistKubeconfigOptions()
+    }
+
+    private func startPolling() {
+        restartPolling()
+    }
+
+    private func restartPolling() {
+        pollingTask?.cancel()
+
+        pollingTask = Task {
+            await refreshStatus()
+
+            while !Task.isCancelled {
+                try? await Task.sleep(for: selectedPollingInterval.duration)
+                guard !Task.isCancelled else { return }
+                await refreshStatus()
+            }
+        }
+    }
+
+    private func runCommand(
+        busyMessage: String,
+        switchingKubeconfig: Bool = false,
+        operation: @escaping (TelepresenceCLI) async -> CommandOutcome
+    ) {
+        guard !isRunningCommand else { return }
+
+        isRunningCommand = true
+        isSwitchingKubeconfig = switchingKubeconfig
+        snapshot = .busy(busyMessage)
+        lastErrorText = nil
+
+        Task {
+            let outcome = await operation(cli)
+            isRunningCommand = false
+            isSwitchingKubeconfig = false
+
+            if outcome.success == false {
+                lastErrorText = outcome.details ?? outcome.summary
+            }
+
+            await refreshStatus()
+        }
+    }
+
+    private func refreshStatus() async {
+        guard !isRunningCommand else { return }
+
+        let previousState = snapshot.state
+        let updatedSnapshot = await cli.fetchStatus()
+        snapshot = updatedSnapshot
+
+        if updatedSnapshot.state == .connected {
+            hasAttemptedAutoReconnectForCurrentDrop = false
+        }
+
+        if updatedSnapshot.state == .error {
+            lastErrorText = updatedSnapshot.detailText
+        }
+
+        guard shouldAttemptAutoReconnect(from: previousState, to: updatedSnapshot.state) else {
+            return
+        }
+
+        hasAttemptedAutoReconnectForCurrentDrop = true
+        runCommand(busyMessage: "Connection dropped. Reconnecting...") { cli in
+            await cli.reconnect()
+        }
+    }
+
+    private func scanDefaultKubeconfigDirectory() -> [String] {
+        let kubeDirectory = fileManager.homeDirectoryForCurrentUser.appendingPathComponent(".kube")
+        return scanKubeconfigFiles(in: kubeDirectory)
+    }
+
+    private func scanKubeconfigFiles(in directoryURL: URL) -> [String] {
+        guard let contents = try? fileManager.contentsOfDirectory(
+            at: directoryURL,
+            includingPropertiesForKeys: [.isRegularFileKey],
+            options: [.skipsHiddenFiles]
+        ) else {
+            return []
+        }
+
+        return contents.compactMap { fileURL in
+            guard isEligibleKubeconfigFile(fileURL) else {
+                return nil
+            }
+            return normalizePath(fileURL.path)
+        }
+    }
+
+    private func isEligibleKubeconfigFile(_ fileURL: URL) -> Bool {
+        let resourceValues = try? fileURL.resourceValues(forKeys: [.isRegularFileKey])
+        guard resourceValues?.isRegularFile == true else {
+            return false
+        }
+
+        let pathExtension = fileURL.pathExtension.lowercased()
+        if pathExtension == "yaml" || pathExtension == "yml" || pathExtension == "kubeconfig" {
+            return true
+        }
+
+        let filename = fileURL.lastPathComponent.lowercased()
+        if filename == "config" || filename.hasPrefix("config-") || filename.hasPrefix("config_") {
+            return true
+        }
+
+        if filename.contains("kubeconfig") {
+            return true
+        }
+
+        return false
+    }
+
+    private func loadRememberedKubeconfigPaths() -> [String] {
+        let storedPaths = defaults.stringArray(forKey: DefaultsKey.rememberedKubeconfigPaths) ?? []
+        return storedPaths
+            .map(normalizePath)
+            .filter { fileManager.fileExists(atPath: $0) }
+    }
+
+    private func mergeKubeconfigOptions(with paths: [String]) {
+        let validPaths = paths
+            .map(normalizePath)
+            .filter { fileManager.fileExists(atPath: $0) }
+
+        let mergedPaths = Array(Set(kubeconfigOptions.map(\.path) + validPaths))
+            .sorted {
+                URL(fileURLWithPath: $0).lastPathComponent.localizedCaseInsensitiveCompare(
+                    URL(fileURLWithPath: $1).lastPathComponent
+                ) == .orderedAscending
+            }
+
+        kubeconfigOptions = mergedPaths.map(KubeconfigOption.init(path:))
+    }
+
+    private func existingOptionPath(matching path: String) -> String? {
+        kubeconfigOptions.first(where: { $0.path == path })?.path
+    }
+
+    private func persistKubeconfigOptions() {
+        defaults.set(kubeconfigOptions.map(\.path), forKey: DefaultsKey.rememberedKubeconfigPaths)
+    }
+
+    private func persistSelectedKubeconfigPath() {
+        defaults.set(selectedKubeconfigPath, forKey: DefaultsKey.selectedKubeconfigPath)
+    }
+
+    private func normalizePath(_ path: String) -> String {
+        URL(fileURLWithPath: path).standardizedFileURL.path
+    }
+
+    private func refreshLaunchAtLoginState() {
+        isLaunchAtLoginEnabled = LaunchAtLoginManager.isEnabled
+    }
+
+    private func shouldAttemptAutoReconnect(
+        from previousState: TelepresenceStatusSnapshot.State,
+        to nextState: TelepresenceStatusSnapshot.State
+    ) -> Bool {
+        autoReconnectEnabled &&
+        !hasAttemptedAutoReconnectForCurrentDrop &&
+        previousState == .connected &&
+        nextState == .disconnected
+    }
+}
+
+private enum LaunchAtLoginManager {
+    static var isEnabled: Bool {
+        switch SMAppService.mainApp.status {
+        case .enabled, .requiresApproval:
+            return true
+        default:
+            return false
+        }
+    }
+
+    static func setEnabled(_ enabled: Bool) throws {
+        if enabled {
+            try SMAppService.mainApp.register()
+        } else {
+            try SMAppService.mainApp.unregister()
+        }
+    }
+}

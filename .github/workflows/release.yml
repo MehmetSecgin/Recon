@@ -1,0 +1,39 @@
+name: Release
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-14
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Make scripts executable
+        run: chmod +x build.sh release.sh install.sh
+
+      - name: Build release asset
+        run: ./release.sh
+
+      - name: Generate release tag
+        id: tag
+        run: |
+          echo "value=release-$(date -u +'%Y%m%d-%H%M%S')-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${{ steps.tag.outputs.value }}" \
+            build/Recon.app.zip \
+            --target "$GITHUB_SHA" \
+            --title "Recon ${{ steps.tag.outputs.value }}" \
+            --notes "Automated release for commit $GITHUB_SHA"
