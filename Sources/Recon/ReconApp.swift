@@ -192,64 +192,84 @@ private struct ReconMenuView: View {
     }
 
     private var preferencesSection: some View {
-        DisclosureGroup(isExpanded: $preferencesExpanded) {
-            VStack(alignment: .leading, spacing: 10) {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("POLLING")
-                        .font(.system(size: 11, weight: .regular))
-                        .foregroundStyle(.tertiary)
+        VStack(alignment: .leading, spacing: 8) {
+            Button {
+                withAnimation(.easeInOut(duration: 0.15)) {
+                    preferencesExpanded.toggle()
+                }
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: preferencesExpanded ? "chevron.down" : "chevron.right")
+                        .font(.system(size: 11, weight: .semibold))
 
-                    Picker(
-                        selection: Binding<Int>(
-                            get: { pollingIntervalSeconds },
+                    Text("Preferences...")
+                        .font(.system(size: 13, weight: .regular))
+
+                    Spacer(minLength: 0)
+                }
+                .contentShape(Rectangle())
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.vertical, 2)
+            }
+            .buttonStyle(.plain)
+
+            if preferencesExpanded {
+                VStack(alignment: .leading, spacing: 10) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("POLLING")
+                            .font(.system(size: 11, weight: .regular))
+                            .foregroundStyle(.tertiary)
+
+                        Picker(
+                            selection: Binding<Int>(
+                                get: { pollingIntervalSeconds },
+                                set: { newValue in
+                                    pollingIntervalSeconds = newValue
+                                    controller.setPollingInterval(seconds: newValue)
+                                }
+                            )
+                        ) {
+                            ForEach(TelepresenceController.PollingIntervalOption.allCases) { option in
+                                Text(option.title).tag(option.rawValue)
+                            }
+                        } label: {
+                            Text(controller.selectedPollingInterval.title)
+                                .font(.system(size: 13, weight: .regular))
+                        }
+                        .pickerStyle(.menu)
+                    }
+
+                    Toggle(
+                        "Launch at login",
+                        isOn: Binding<Bool>(
+                            get: { controller.isLaunchAtLoginEnabled },
                             set: { newValue in
-                                pollingIntervalSeconds = newValue
-                                controller.setPollingInterval(seconds: newValue)
+                                controller.setLaunchAtLoginEnabled(newValue)
                             }
                         )
-                    ) {
-                        ForEach(TelepresenceController.PollingIntervalOption.allCases) { option in
-                            Text(option.title).tag(option.rawValue)
-                        }
-                    } label: {
-                        Text(controller.selectedPollingInterval.title)
-                            .font(.system(size: 13, weight: .regular))
+                    )
+                    .disabled(controller.isUpdatingLaunchAtLogin)
+
+                    Toggle(
+                        "Auto-reconnect on disconnect",
+                        isOn: Binding<Bool>(
+                            get: { autoReconnectEnabled },
+                            set: { newValue in
+                                autoReconnectEnabled = newValue
+                                controller.setAutoReconnectEnabled(newValue)
+                            }
+                        )
+                    )
+
+                    if controller.isUpdatingLaunchAtLogin {
+                        Text("updating launch at login...")
+                            .font(.system(size: 11, weight: .regular))
+                            .foregroundStyle(.tertiary)
                     }
-                    .pickerStyle(.menu)
                 }
-
-                Toggle(
-                    "Launch at login",
-                    isOn: Binding<Bool>(
-                        get: { controller.isLaunchAtLoginEnabled },
-                        set: { newValue in
-                            controller.setLaunchAtLoginEnabled(newValue)
-                        }
-                    )
-                )
-                .disabled(controller.isUpdatingLaunchAtLogin)
-
-                Toggle(
-                    "Auto-reconnect on disconnect",
-                    isOn: Binding<Bool>(
-                        get: { autoReconnectEnabled },
-                        set: { newValue in
-                            autoReconnectEnabled = newValue
-                            controller.setAutoReconnectEnabled(newValue)
-                        }
-                    )
-                )
-
-                if controller.isUpdatingLaunchAtLogin {
-                    Text("updating launch at login...")
-                        .font(.system(size: 11, weight: .regular))
-                        .foregroundStyle(.tertiary)
-                }
+                .padding(.leading, 18)
+                .transition(.opacity.combined(with: .move(edge: .top)))
             }
-            .padding(.top, 8)
-        } label: {
-            Text("Preferences...")
-                .font(.system(size: 13, weight: .regular))
         }
         .accentColor(.primary)
     }
