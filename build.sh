@@ -52,6 +52,7 @@ xcrun swiftc \
   -target "${ARCH}-apple-macos14.0" \
   -sdk "$SDK_PATH" \
   -parse-as-library \
+  -framework UserNotifications \
   -o "$MACOS_DIR/Recon" \
   "${SOURCE_FILES[@]}"
 

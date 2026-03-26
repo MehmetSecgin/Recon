@@ -1,6 +1,7 @@
 import Combine
 import Foundation
 import ServiceManagement
+import UserNotifications
 
 struct KubeconfigOption: Identifiable, Hashable {
     let path: String
@@ -16,6 +17,8 @@ final class TelepresenceController: ObservableObject {
         static let rememberedKubeconfigPaths = "Recon.RememberedKubeconfigPaths"
         static let pollingIntervalSeconds = "Recon.PollingIntervalSeconds"
         static let autoReconnectEnabled = "Recon.AutoReconnectEnabled"
+        static let notificationsEnabled = "Recon.NotificationsEnabled"
+        static let autoConnectOnLaunchEnabled = "Recon.AutoConnectOnLaunchEnabled"
     }
 
     enum PollingIntervalOption: Int, CaseIterable, Identifiable {
@@ -50,6 +53,8 @@ final class TelepresenceController: ObservableObject {
     @Published private(set) var kubeconfigOptions: [KubeconfigOption] = []
     @Published private(set) var selectedPollingInterval: PollingIntervalOption
     @Published private(set) var autoReconnectEnabled: Bool
+    @Published private(set) var notificationsEnabled: Bool
+    @Published private(set) var autoConnectOnLaunchEnabled: Bool
     @Published private(set) var isLaunchAtLoginEnabled = false
     @Published private(set) var isUpdatingLaunchAtLogin = false
     @Published var selectedKubeconfigPath: String?
@@ -97,17 +102,21 @@ final class TelepresenceController: ObservableObject {
     private let fileManager = FileManager.default
     private var pollingTask: Task<Void, Never>?
     private var hasAttemptedAutoReconnectForCurrentDrop = false
+    private var userInitiatedDisconnect = false
 
     init() {
         let storedInterval = defaults.object(forKey: DefaultsKey.pollingIntervalSeconds) as? Int
         selectedPollingInterval = PollingIntervalOption(rawValue: storedInterval ?? PollingIntervalOption.fiveMinutes.rawValue)
             ?? .fiveMinutes
         autoReconnectEnabled = defaults.object(forKey: DefaultsKey.autoReconnectEnabled) as? Bool ?? false
+        notificationsEnabled = defaults.object(forKey: DefaultsKey.notificationsEnabled) as? Bool ?? false
+        autoConnectOnLaunchEnabled = defaults.object(forKey: DefaultsKey.autoConnectOnLaunchEnabled) as? Bool ?? false
 
         Task { [weak self] in
             guard let self else { return }
             self.refreshLaunchAtLoginState()
             await self.loadKubeconfigOptions()
+            await self.performAutoConnectOnLaunchIfNeeded()
             self.startPolling()
         }
     }
@@ -117,14 +126,23 @@ final class TelepresenceController: ObservableObject {
     }
 
     func connect() {
+        userInitiatedDisconnect = false
         runCommand(busyMessage: "Connecting to Telepresence...") { cli in
             await cli.connect()
         }
     }
 
     func reconnect() {
+        userInitiatedDisconnect = false
         runCommand(busyMessage: "Restarting Telepresence...") { cli in
             await cli.reconnect()
+        }
+    }
+
+    func disconnect() {
+        userInitiatedDisconnect = true
+        runCommand(busyMessage: "Disconnecting Telepresence...") { cli in
+            await cli.disconnect()
         }
     }
 
@@ -147,6 +165,36 @@ final class TelepresenceController: ObservableObject {
         guard autoReconnectEnabled != enabled else { return }
         autoReconnectEnabled = enabled
         defaults.set(enabled, forKey: DefaultsKey.autoReconnectEnabled)
+    }
+
+    func setNotificationsEnabled(_ enabled: Bool) {
+        guard notificationsEnabled != enabled else { return }
+
+        if enabled {
+            requestNotificationPermission { [weak self] granted in
+                guard let self else { return }
+
+                if granted {
+                    self.notificationsEnabled = true
+                    self.defaults.set(true, forKey: DefaultsKey.notificationsEnabled)
+                    self.lastErrorText = nil
+                } else {
+                    self.notificationsEnabled = false
+                    self.defaults.set(false, forKey: DefaultsKey.notificationsEnabled)
+                    self.lastErrorText = "Notifications were not enabled because permission was denied."
+                }
+            }
+            return
+        }
+
+        notificationsEnabled = false
+        defaults.set(false, forKey: DefaultsKey.notificationsEnabled)
+    }
+
+    func setAutoConnectOnLaunchEnabled(_ enabled: Bool) {
+        guard autoConnectOnLaunchEnabled != enabled else { return }
+        autoConnectOnLaunchEnabled = enabled
+        defaults.set(enabled, forKey: DefaultsKey.autoConnectOnLaunchEnabled)
     }
 
     func setLaunchAtLoginEnabled(_ enabled: Bool) {
@@ -237,6 +285,7 @@ final class TelepresenceController: ObservableObject {
     private func runCommand(
         busyMessage: String,
         switchingKubeconfig: Bool = false,
+        isAutoReconnect: Bool = false,
         operation: @escaping (TelepresenceCLI) async -> CommandOutcome
     ) {
         guard !isRunningCommand else { return }
@@ -253,6 +302,9 @@ final class TelepresenceController: ObservableObject {
 
             if outcome.success == false {
                 lastErrorText = outcome.details ?? outcome.summary
+                if isAutoReconnect {
+                    await postNotification(title: "Auto-reconnect failed", body: outcome.summary)
+                }
             }
 
             await refreshStatus()
@@ -268,10 +320,17 @@ final class TelepresenceController: ObservableObject {
 
         if updatedSnapshot.state == .connected {
             hasAttemptedAutoReconnectForCurrentDrop = false
+            userInitiatedDisconnect = false
         }
 
         if updatedSnapshot.state == .error {
             lastErrorText = updatedSnapshot.detailText
+        }
+
+        if previousState == .connected && updatedSnapshot.state == .disconnected {
+            await postNotification(title: "Telepresence disconnected", body: updatedSnapshot.detailText)
+        } else if (previousState == .disconnected || previousState == .error) && updatedSnapshot.state == .connected {
+            await postNotification(title: "Telepresence connected", body: updatedSnapshot.detailText)
         }
 
         guard shouldAttemptAutoReconnect(from: previousState, to: updatedSnapshot.state) else {
@@ -279,9 +338,33 @@ final class TelepresenceController: ObservableObject {
         }
 
         hasAttemptedAutoReconnectForCurrentDrop = true
-        runCommand(busyMessage: "Connection dropped. Reconnecting...") { cli in
+        runCommand(busyMessage: "Connection dropped. Reconnecting...", isAutoReconnect: true) { cli in
             await cli.reconnect()
         }
+    }
+
+    private func performAutoConnectOnLaunchIfNeeded() async {
+        guard autoConnectOnLaunchEnabled else { return }
+
+        let initialSnapshot = await cli.fetchStatus()
+        snapshot = initialSnapshot
+
+        guard initialSnapshot.state == .disconnected || initialSnapshot.state == .error else {
+            return
+        }
+
+        snapshot = .busy("Auto-connecting on launch...")
+        lastErrorText = nil
+
+        let outcome = await cli.connect()
+        if outcome.success {
+            await postNotification(title: "Telepresence connected", body: outcome.summary)
+        } else {
+            lastErrorText = outcome.details ?? outcome.summary
+            await postNotification(title: "Auto-connect failed", body: outcome.summary)
+        }
+
+        await refreshStatus()
     }
 
     private func scanDefaultKubeconfigDirectory() -> [String] {
@@ -371,11 +454,43 @@ final class TelepresenceController: ObservableObject {
         isLaunchAtLoginEnabled = LaunchAtLoginManager.isEnabled
     }
 
+    private func requestNotificationPermission(completion: @escaping (Bool) -> Void) {
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { granted, _ in
+            Task { @MainActor in
+                completion(granted)
+            }
+        }
+    }
+
+    private func postNotification(title: String, body: String) async {
+        guard notificationsEnabled else { return }
+
+        let center = UNUserNotificationCenter.current()
+        let settings = await center.notificationSettings()
+        guard settings.authorizationStatus == .authorized || settings.authorizationStatus == .provisional else {
+            return
+        }
+
+        let content = UNMutableNotificationContent()
+        content.title = title
+        content.body = body
+        content.sound = .default
+
+        let request = UNNotificationRequest(
+            identifier: UUID().uuidString,
+            content: content,
+            trigger: nil
+        )
+
+        try? await center.add(request)
+    }
+
     private func shouldAttemptAutoReconnect(
         from previousState: TelepresenceStatusSnapshot.State,
         to nextState: TelepresenceStatusSnapshot.State
     ) -> Bool {
         autoReconnectEnabled &&
+        !userInitiatedDisconnect &&
         !hasAttemptedAutoReconnectForCurrentDrop &&
         previousState == .connected &&
         nextState == .disconnected
