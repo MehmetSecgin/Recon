@@ -8,6 +8,8 @@
 	<string>Recon</string>
 	<key>CFBundleExecutable</key>
 	<string>Recon</string>
+	<key>CFBundleIconName</key>
+	<string>AppIcon</string>
 	<key>CFBundleIconFile</key>
 	<string>AppIcon</string>
 	<key>CFBundleIdentifier</key>

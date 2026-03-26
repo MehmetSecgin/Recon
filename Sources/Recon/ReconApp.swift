@@ -6,6 +6,10 @@ import UniformTypeIdentifiers
 struct ReconApp: App {
     @StateObject private var controller = TelepresenceController()
 
+    init() {
+        NSApp.appearance = NSAppearance(named: .darkAqua)
+    }
+
     var body: some Scene {
         MenuBarExtra {
             ReconMenuView(controller: controller)
@@ -56,6 +60,7 @@ private struct ReconMenuView: View {
         }
         .padding(16)
         .frame(width: 340, alignment: .leading)
+        .tint(.gray)
         .onAppear {
             controller.refreshNow()
         }

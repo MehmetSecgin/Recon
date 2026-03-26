@@ -4,11 +4,13 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
 APP_DIR="$ROOT_DIR/build/Recon.app"
+BUILD_DIR="$ROOT_DIR/build"
 MACOS_DIR="$APP_DIR/Contents/MacOS"
 RESOURCES_DIR="$APP_DIR/Contents/Resources"
 SDK_PATH="$(xcrun --sdk macosx --show-sdk-path)"
 ARCH="$(uname -m)"
-ICON_SOURCE_DIR="$ROOT_DIR/Resources/AppIcon.appiconset"
+ASSET_CATALOG_DIR="$ROOT_DIR/Resources/Assets.xcassets"
+ICON_SOURCE_DIR="$ASSET_CATALOG_DIR/AppIcon.appiconset"
 ICONSET_DIR="$ROOT_DIR/build/AppIcon.iconset"
 ICON_FILE="$RESOURCES_DIR/AppIcon.icns"
 
@@ -22,6 +24,16 @@ rm -rf "$APP_DIR"
 rm -rf "$ICONSET_DIR"
 mkdir -p "$MACOS_DIR" "$RESOURCES_DIR" "$ICONSET_DIR"
 cp "$ROOT_DIR/Info.plist" "$APP_DIR/Contents/Info.plist"
+
+if ! xcrun actool \
+  --compile "$RESOURCES_DIR" \
+  --platform macosx \
+  --minimum-deployment-target 14.0 \
+  --app-icon AppIcon \
+  --output-partial-info-plist "$BUILD_DIR/asset-info.plist" \
+  "$ASSET_CATALOG_DIR" >/dev/null; then
+  printf 'warning: actool failed, continuing with AppIcon.icns fallback\n' >&2
+fi
 
 cp "$ICON_SOURCE_DIR/16.png" "$ICONSET_DIR/icon_16x16.png"
 cp "$ICON_SOURCE_DIR/32.png" "$ICONSET_DIR/icon_16x16@2x.png"
