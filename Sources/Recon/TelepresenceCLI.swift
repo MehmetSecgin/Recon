@@ -221,6 +221,10 @@ actor TelepresenceCLI {
         }
     }
 
+    func disconnect() async -> CommandOutcome {
+        await runCommand(arguments: ["quit"], successSummary: "Telepresence disconnected.")
+    }
+
     private func connectArguments() async -> [String] {
         var arguments = ["connect"]
         if let context = await currentKubernetesContext() {

@@ -27,6 +27,8 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
 private struct ReconMenuView: View {
     @AppStorage("Recon.PollingIntervalSeconds") private var pollingIntervalSeconds = TelepresenceController.PollingIntervalOption.fiveMinutes.rawValue
     @AppStorage("Recon.AutoReconnectEnabled") private var autoReconnectEnabled = false
+    @AppStorage("Recon.NotificationsEnabled") private var notificationsEnabled = false
+    @AppStorage("Recon.AutoConnectOnLaunchEnabled") private var autoConnectOnLaunchEnabled = false
     @State private var preferencesExpanded = false
 
     @ObservedObject var controller: TelepresenceController
@@ -69,6 +71,8 @@ private struct ReconMenuView: View {
         .onAppear {
             controller.refreshNow()
         }
+        .onReceive(controller.$notificationsEnabled) { notificationsEnabled = $0 }
+        .onReceive(controller.$autoConnectOnLaunchEnabled) { autoConnectOnLaunchEnabled = $0 }
     }
 
     private var statusHeaderSection: some View {
@@ -183,6 +187,15 @@ private struct ReconMenuView: View {
             }
             .disabled(controller.isRunningCommand || controller.snapshot.state == .connected)
 
+            Button("Disconnect") {
+                controller.disconnect()
+            }
+            .disabled(
+                controller.isRunningCommand ||
+                controller.snapshot.state == .disconnected ||
+                controller.snapshot.state == .unavailable
+            )
+
             Button("Reconnect") {
                 controller.reconnect()
             }
@@ -262,6 +275,28 @@ private struct ReconMenuView: View {
                             set: { newValue in
                                 autoReconnectEnabled = newValue
                                 controller.setAutoReconnectEnabled(newValue)
+                            }
+                        )
+                    )
+
+                    Toggle(
+                        "Notify on state changes",
+                        isOn: Binding<Bool>(
+                            get: { notificationsEnabled },
+                            set: { newValue in
+                                notificationsEnabled = newValue
+                                controller.setNotificationsEnabled(newValue)
+                            }
+                        )
+                    )
+
+                    Toggle(
+                        "Auto-connect on launch",
+                        isOn: Binding<Bool>(
+                            get: { autoConnectOnLaunchEnabled },
+                            set: { newValue in
+                                autoConnectOnLaunchEnabled = newValue
+                                controller.setAutoConnectOnLaunchEnabled(newValue)
                             }
                         )
                     )
