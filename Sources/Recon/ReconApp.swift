@@ -33,8 +33,24 @@ private struct ReconMenuView: View {
 
     @ObservedObject var controller: TelepresenceController
 
+    private var appVersionText: String {
+        let shortVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
+        let buildNumber = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String
+
+        switch (shortVersion, buildNumber) {
+        case let (shortVersion?, buildNumber?) where shortVersion != buildNumber:
+            return "v\(shortVersion) (\(buildNumber))"
+        case let (shortVersion?, _):
+            return "v\(shortVersion)"
+        case let (_, buildNumber?):
+            return "build \(buildNumber)"
+        default:
+            return "version unavailable"
+        }
+    }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: 16) {
             statusHeaderSection
 
             Divider()
@@ -64,7 +80,7 @@ private struct ReconMenuView: View {
             footerSection
         }
         .padding(16)
-        .frame(width: 340, alignment: .leading)
+        .frame(width: 352, alignment: .leading)
         .tint(.gray)
         .background(MenuWindowConfigurator())
         .preferredColorScheme(.dark)
@@ -140,6 +156,7 @@ private struct ReconMenuView: View {
             } label: {
                 Text(controller.selectedKubeconfigDisplayName)
                     .font(.system(size: 13, weight: .regular))
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
             .pickerStyle(.menu)
             .disabled(controller.isSwitchingKubeconfig || controller.kubeconfigOptions.isEmpty)
@@ -182,12 +199,12 @@ private struct ReconMenuView: View {
 
     private var actionsSection: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Button("Connect") {
+            actionButton("Connect") {
                 controller.connect()
             }
             .disabled(controller.isRunningCommand || controller.snapshot.state == .connected)
 
-            Button("Disconnect") {
+            actionButton("Disconnect") {
                 controller.disconnect()
             }
             .disabled(
@@ -196,17 +213,18 @@ private struct ReconMenuView: View {
                 controller.snapshot.state == .unavailable
             )
 
-            Button("Reconnect") {
+            actionButton("Reconnect") {
                 controller.reconnect()
             }
             .disabled(controller.isRunningCommand)
 
-            Button("Refresh Now") {
+            actionButton("Refresh Now") {
                 controller.refreshNow()
             }
             .disabled(controller.isRunningCommand)
         }
         .buttonStyle(.bordered)
+        .controlSize(.regular)
     }
 
     private var preferencesSection: some View {
@@ -331,12 +349,25 @@ private struct ReconMenuView: View {
     }
 
     private var footerSection: some View {
-        Button("Quit Recon") {
-            NSApplication.shared.terminate(nil)
+        HStack(alignment: .firstTextBaseline, spacing: 12) {
+            Text("Recon \(appVersionText)")
+                .font(.system(size: 11, weight: .regular, design: .monospaced))
+                .foregroundStyle(.tertiary)
+
+            Spacer(minLength: 8)
+
+            Button("Quit Recon") {
+                NSApplication.shared.terminate(nil)
+            }
+            .buttonStyle(.plain)
+            .font(.system(size: 13, weight: .regular))
+            .foregroundColor(.red)
         }
-        .buttonStyle(.plain)
-        .font(.system(size: 13, weight: .regular))
-        .foregroundColor(.red)
+    }
+
+    private func actionButton(_ title: String, action: @escaping () -> Void) -> some View {
+        Button(title, action: action)
+            .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func browseForKubeconfig() {
