@@ -14,11 +14,7 @@ ICON_SOURCE_DIR="$ASSET_CATALOG_DIR/AppIcon.appiconset"
 ICONSET_DIR="$ROOT_DIR/build/AppIcon.iconset"
 ICON_FILE="$RESOURCES_DIR/AppIcon.icns"
 
-SOURCE_FILES=(
-  "$ROOT_DIR/Sources/Recon/ReconApp.swift"
-  "$ROOT_DIR/Sources/Recon/TelepresenceCLI.swift"
-  "$ROOT_DIR/Sources/Recon/TelepresenceController.swift"
-)
+SOURCE_FILES=(${(f)"$(find "$ROOT_DIR/Sources/Recon" -name '*.swift' | sort)"})
 
 rm -rf "$APP_DIR"
 rm -rf "$ICONSET_DIR"
