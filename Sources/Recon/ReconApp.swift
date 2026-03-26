@@ -141,32 +141,33 @@ private struct ReconMenuView: View {
                 .font(.system(size: 11, weight: .regular))
                 .foregroundStyle(.tertiary)
 
-            Picker(
-                selection: Binding<String?>(
-                    get: { controller.selectedKubeconfigPath },
-                    set: { newValue in
-                        guard let newValue else { return }
-                        controller.addAndSelectKubeconfig(path: newValue)
+            HStack(alignment: .center, spacing: 10) {
+                Picker(
+                    selection: Binding<String?>(
+                        get: { controller.selectedKubeconfigPath },
+                        set: { newValue in
+                            guard let newValue else { return }
+                            controller.addAndSelectKubeconfig(path: newValue)
+                        }
+                    )
+                ) {
+                    ForEach(controller.kubeconfigOptions) { option in
+                        Text(option.displayName).tag(Optional(option.path))
                     }
-                )
-            ) {
-                ForEach(controller.kubeconfigOptions) { option in
-                    Text(option.displayName).tag(Optional(option.path))
+                } label: {
+                    EmptyView()
                 }
-            } label: {
-                Text(controller.selectedKubeconfigDisplayName)
-                    .font(.system(size: 13, weight: .regular))
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            .pickerStyle(.menu)
-            .disabled(controller.isSwitchingKubeconfig || controller.kubeconfigOptions.isEmpty)
+                .pickerStyle(.menu)
+                .labelsHidden()
+                .disabled(controller.isSwitchingKubeconfig || controller.kubeconfigOptions.isEmpty)
 
-            Button("Browse for file...") {
-                browseForKubeconfig()
+                Button("Choose...") {
+                    browseForKubeconfig()
+                }
+                .buttonStyle(.plain)
+                .font(.system(size: 12, weight: .regular))
+                .foregroundStyle(.secondary)
             }
-            .buttonStyle(.plain)
-            .font(.system(size: 12, weight: .regular))
-            .foregroundStyle(.secondary)
 
             if controller.isSwitchingKubeconfig {
                 Text("switching config -> reconnecting...")
