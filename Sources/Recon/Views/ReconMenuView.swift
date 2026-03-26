@@ -30,9 +30,21 @@ struct ReconMenuView: View {
         VStack(alignment: .leading, spacing: 14) {
             statusHeaderSection
 
+            if let errorPresentation = controller.errorPresentation {
+                ConnectionErrorBanner(
+                    presentation: errorPresentation,
+                    onCopyStatus: controller.copyStatusCommand,
+                    onOpenLogs: controller.openLogs
+                )
+            }
+
             SectionDivider()
 
             metadataSection
+
+            if controller.isProductionConnection {
+                ProductionWarningBanner()
+            }
 
             if controller.isSwitchingKubeconfig {
                 switchingHint
@@ -49,11 +61,6 @@ struct ReconMenuView: View {
             SectionDivider()
 
             preferencesSection
-
-            if let lastErrorText = controller.lastErrorText, !lastErrorText.isEmpty {
-                SectionDivider()
-                errorSection(lastErrorText)
-            }
 
             SectionDivider()
 
@@ -75,8 +82,14 @@ struct ReconMenuView: View {
             HStack(alignment: .center, spacing: 10) {
                 statusIndicator
 
-                Text(controller.snapshot.statusText)
-                    .font(.system(size: 16, weight: .semibold))
+                HStack(spacing: 8) {
+                    Text(controller.snapshot.statusText)
+                        .font(.system(size: 16, weight: .semibold))
+
+                    if controller.isProductionConnection {
+                        ProductionBadge()
+                    }
+                }
 
                 Spacer(minLength: 8)
 
@@ -119,9 +132,9 @@ struct ReconMenuView: View {
                 .frame(width: 10, height: 10)
         case .connected:
             Circle()
-                .fill(Color.green)
+                .fill(controller.isProductionConnection ? Color.red : Color.green)
                 .frame(width: 8, height: 8)
-                .shadow(color: Color.green.opacity(0.3), radius: 2)
+                .shadow(color: (controller.isProductionConnection ? Color.red : Color.green).opacity(0.3), radius: 2)
         case .disconnected, .unavailable:
             Circle()
                 .fill(Color.secondary)
@@ -145,7 +158,8 @@ struct ReconMenuView: View {
             MetadataRow(
                 key: "Context",
                 value: controller.displayContext,
-                dimmed: controller.targetMetadata.isLastKnown
+                dimmed: controller.targetMetadata.isLastKnown,
+                valueColor: controller.isProductionConnection ? .red : nil
             )
 
             MetadataRow(
@@ -215,7 +229,11 @@ struct ReconMenuView: View {
                             controller.reconnect()
                         }
 
-                        actionButton("Disconnect", prominent: false, tint: .red) {
+                        actionButton(
+                            "Disconnect",
+                            prominent: controller.isProductionConnection,
+                            tint: .red
+                        ) {
                             controller.disconnect()
                         }
                     }
@@ -336,26 +354,17 @@ struct ReconMenuView: View {
                             .font(.system(size: 11, weight: .regular))
                             .foregroundStyle(.tertiary)
                     }
+
+                    if let settingsStatusMessage = controller.settingsStatusMessage, !settingsStatusMessage.isEmpty {
+                        Text(settingsStatusMessage)
+                            .font(.system(size: 11, weight: .regular))
+                            .foregroundStyle(.tertiary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                 }
                 .padding(.leading, 18)
                 .transition(.opacity.combined(with: .move(edge: .top)))
             }
-        }
-    }
-
-    private func errorSection(_ errorText: String) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("LAST ERROR")
-                .font(.system(size: 11, weight: .regular))
-                .foregroundStyle(.red)
-
-            Text(errorText)
-                .font(.system(size: 12, weight: .regular, design: .monospaced))
-                .foregroundStyle(.secondary)
-                .textSelection(.enabled)
-                .padding(10)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
         }
     }
 
@@ -420,6 +429,7 @@ private struct MetadataRow: View {
     let key: String
     let value: String
     var dimmed = false
+    var valueColor: Color?
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 12) {
@@ -431,10 +441,114 @@ private struct MetadataRow: View {
 
             Text(value)
                 .font(.system(size: 11, weight: .regular, design: .monospaced))
-                .foregroundStyle(dimmed ? .tertiary : .primary)
+                .foregroundStyle(dimmed ? AnyShapeStyle(.tertiary) : AnyShapeStyle(valueColor ?? .primary))
                 .multilineTextAlignment(.trailing)
                 .lineLimit(2)
         }
+    }
+}
+
+private struct ProductionBadge: View {
+    var body: some View {
+        Text("PRODUCTION")
+            .font(.system(size: 10, weight: .semibold))
+            .foregroundStyle(.red)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3)
+            .background(Color.red.opacity(0.12), in: Capsule())
+    }
+}
+
+private struct ProductionWarningBanner: View {
+    var body: some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(.red)
+                .padding(.top, 1)
+
+            Text("You are connected to a production cluster. Actions here affect live traffic.")
+                .font(.system(size: 11, weight: .regular))
+                .foregroundStyle(.red)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(10)
+        .background(Color.red.opacity(0.08), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .stroke(Color.red.opacity(0.2), lineWidth: 0.5)
+        )
+    }
+}
+
+private struct ConnectionErrorBanner: View {
+    let presentation: ErrorPresentation
+    let onCopyStatus: () -> Void
+    let onOpenLogs: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .top, spacing: 8) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.red)
+                    .padding(.top, 1)
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(presentation.title)
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(.primary)
+
+                    Text(presentation.message)
+                        .font(.system(size: 12, weight: .regular))
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    if let suggestion = presentation.suggestion, !suggestion.isEmpty {
+                        Text(suggestion)
+                            .font(.system(size: 11, weight: .regular))
+                            .foregroundStyle(.tertiary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            }
+
+            if let rawDetailPreview = presentation.rawDetailPreview, !rawDetailPreview.isEmpty {
+                Text(rawDetailPreview)
+                    .font(.system(size: 11, weight: .regular, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+                    .padding(8)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            }
+
+            HStack(spacing: 10) {
+                if presentation.canCopyStatus {
+                    Button("Copy 'telepresence status'") {
+                        onCopyStatus()
+                    }
+                    .buttonStyle(.plain)
+                    .font(.system(size: 11, weight: .regular))
+                    .foregroundStyle(.secondary)
+                }
+
+                if presentation.canOpenLogs {
+                    Button("Open logs…") {
+                        onOpenLogs()
+                    }
+                    .buttonStyle(.plain)
+                    .font(.system(size: 11, weight: .regular))
+                    .foregroundStyle(.secondary)
+                }
+            }
+        }
+        .padding(10)
+        .background(Color.red.opacity(0.08), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .stroke(Color.red.opacity(0.2), lineWidth: 0.5)
+        )
     }
 }
 

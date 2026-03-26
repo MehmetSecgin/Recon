@@ -1,3 +1,4 @@
+import AppKit
 import Combine
 import Foundation
 import ServiceManagement
@@ -60,16 +61,20 @@ final class TelepresenceController: ObservableObject {
     @Published private(set) var isLaunchAtLoginEnabled = false
     @Published private(set) var isUpdatingLaunchAtLogin = false
     @Published var selectedKubeconfigPath: String?
-    @Published private(set) var lastErrorText: String?
+    @Published private(set) var isProductionConnection = false
+    @Published private(set) var errorPresentation: ErrorPresentation?
+    @Published private(set) var settingsStatusMessage: String?
 
     private let environmentResolver: CommandEnvironmentResolver
     private let cli: TelepresenceCLI
     private let targetResolver: KubeTargetResolver
+    private let logLocator = TelepresenceLogLocator()
     private let defaults = UserDefaults.standard
     private let fileManager = FileManager.default
     private var pollingTask: Task<Void, Never>?
     private var hasAttemptedAutoReconnectForCurrentDrop = false
     private var userInitiatedDisconnect = false
+    private var lastCommandFailure: CommandOutcome?
 
     var statusItemTitle: String {
         switch snapshot.state {
@@ -92,8 +97,10 @@ final class TelepresenceController: ObservableObject {
             return nil
         case .busy:
             return snapshot.detailText
-        case .disconnected, .unavailable, .error:
-            return lastErrorText ?? snapshot.detailText
+        case .disconnected:
+            return errorPresentation == nil ? snapshot.detailText : nil
+        case .unavailable, .error:
+            return errorPresentation == nil ? snapshot.detailText : nil
         }
     }
 
@@ -210,11 +217,11 @@ final class TelepresenceController: ObservableObject {
                 if granted {
                     self.notificationsEnabled = true
                     self.defaults.set(true, forKey: DefaultsKey.notificationsEnabled)
-                    self.lastErrorText = nil
+                    self.settingsStatusMessage = nil
                 } else {
                     self.notificationsEnabled = false
                     self.defaults.set(false, forKey: DefaultsKey.notificationsEnabled)
-                    self.lastErrorText = "Notifications were not enabled because permission was denied."
+                    self.settingsStatusMessage = "Notifications weren't enabled because macOS denied permission."
                 }
             }
             return
@@ -222,6 +229,7 @@ final class TelepresenceController: ObservableObject {
 
         notificationsEnabled = false
         defaults.set(false, forKey: DefaultsKey.notificationsEnabled)
+        settingsStatusMessage = nil
     }
 
     func setAutoConnectOnLaunchEnabled(_ enabled: Bool) {
@@ -239,8 +247,9 @@ final class TelepresenceController: ObservableObject {
             do {
                 try LaunchAtLoginManager.setEnabled(enabled)
                 refreshLaunchAtLoginState()
+                settingsStatusMessage = nil
             } catch {
-                lastErrorText = "Could not update launch at login: \(error.localizedDescription)"
+                settingsStatusMessage = "Couldn't update launch at login: \(error.localizedDescription)"
                 refreshLaunchAtLoginState()
             }
 
@@ -275,6 +284,17 @@ final class TelepresenceController: ObservableObject {
             await self.environmentResolver.setPinnedKubeconfigPath(normalizedPath)
             return await cli.reconnect()
         }
+    }
+
+    func copyStatusCommand() {
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString("telepresence status", forType: .string)
+    }
+
+    func openLogs() {
+        guard let url = logLocator.preferredLogURL() else { return }
+        NSWorkspace.shared.open(url)
     }
 
     private func loadKubeconfigOptions() async {
@@ -335,7 +355,7 @@ final class TelepresenceController: ObservableObject {
         isRunningCommand = true
         isSwitchingKubeconfig = switchingKubeconfig
         snapshot = .busy(busyMessage)
-        lastErrorText = nil
+        errorPresentation = nil
 
         Task {
             let outcome = await operation(cli)
@@ -343,10 +363,12 @@ final class TelepresenceController: ObservableObject {
             isSwitchingKubeconfig = false
 
             if outcome.success == false {
-                lastErrorText = outcome.details ?? outcome.summary
+                lastCommandFailure = outcome
                 if isAutoReconnect {
                     await postNotification(title: "Auto-reconnect failed", body: outcome.summary)
                 }
+            } else {
+                lastCommandFailure = nil
             }
 
             await refreshStatus()
@@ -360,14 +382,12 @@ final class TelepresenceController: ObservableObject {
         let updatedSnapshot = await cli.fetchStatus()
         snapshot = updatedSnapshot
         await refreshTargetMetadata()
+        updateDerivedPresentation(for: updatedSnapshot)
 
         if updatedSnapshot.state == .connected {
             hasAttemptedAutoReconnectForCurrentDrop = false
             userInitiatedDisconnect = false
-        }
-
-        if updatedSnapshot.state == .error {
-            lastErrorText = updatedSnapshot.detailText
+            lastCommandFailure = nil
         }
 
         if previousState == .connected && updatedSnapshot.state == .disconnected {
@@ -399,6 +419,7 @@ final class TelepresenceController: ObservableObject {
             isLastKnown: shouldDimMetadata,
             resolutionError: resolvedMetadata.resolutionError
         )
+        isProductionConnection = snapshot.state == .connected && ProductionDetector.isProduction(context: targetMetadata.context)
     }
 
     private func performAutoConnectOnLaunchIfNeeded() async {
@@ -413,13 +434,14 @@ final class TelepresenceController: ObservableObject {
         }
 
         snapshot = .busy("Auto-connecting on launch...")
-        lastErrorText = nil
+        errorPresentation = nil
 
         let outcome = await cli.connect()
         if outcome.success {
             await postNotification(title: "Telepresence connected", body: outcome.summary)
+            lastCommandFailure = nil
         } else {
-            lastErrorText = outcome.details ?? outcome.summary
+            lastCommandFailure = outcome
             await postNotification(title: "Auto-connect failed", body: outcome.summary)
         }
 
@@ -559,6 +581,28 @@ final class TelepresenceController: ObservableObject {
         !hasAttemptedAutoReconnectForCurrentDrop &&
         previousState == .connected &&
         nextState == .disconnected
+    }
+
+    private func updateDerivedPresentation(for snapshot: TelepresenceStatusSnapshot) {
+        let canOpenLogs = logLocator.hasOpenableTarget()
+
+        if let statusPresentation = ErrorPresentationMapper.makeStatusPresentation(
+            snapshot: snapshot,
+            canOpenLogs: canOpenLogs
+        ) {
+            errorPresentation = statusPresentation
+            return
+        }
+
+        if snapshot.state != .connected, let lastCommandFailure {
+            errorPresentation = ErrorPresentationMapper.makeCommandFailurePresentation(
+                outcome: lastCommandFailure,
+                canOpenLogs: canOpenLogs
+            )
+            return
+        }
+
+        errorPresentation = nil
     }
 }
 
