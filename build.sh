@@ -7,6 +7,7 @@ APP_DIR="$ROOT_DIR/build/Recon.app"
 BUILD_DIR="$ROOT_DIR/build"
 MACOS_DIR="$APP_DIR/Contents/MacOS"
 RESOURCES_DIR="$APP_DIR/Contents/Resources"
+APP_INFO_PLIST="$APP_DIR/Contents/Info.plist"
 SDK_PATH="$(xcrun --sdk macosx --show-sdk-path)"
 ARCH="$(uname -m)"
 ASSET_CATALOG_DIR="$ROOT_DIR/Resources/Assets.xcassets"
@@ -14,6 +15,8 @@ ICON_SOURCE_DIR="$ASSET_CATALOG_DIR/AppIcon.appiconset"
 ICONSET_DIR="$ROOT_DIR/build/AppIcon.iconset"
 ICON_FILE="$RESOURCES_DIR/AppIcon.icns"
 ACTOOL_LOG="$(mktemp -t recon-actool.XXXXXX)"
+APP_VERSION="${RECON_VERSION:-}"
+APP_BUILD_NUMBER="${RECON_BUILD_NUMBER:-${RECON_VERSION:-}}"
 
 SOURCE_FILES=(${(f)"$(find "$ROOT_DIR/Sources/Recon" -name '*.swift' | sort)"})
 
@@ -37,7 +40,15 @@ trap cleanup EXIT
 rm -rf "$APP_DIR"
 rm -rf "$ICONSET_DIR"
 mkdir -p "$MACOS_DIR" "$RESOURCES_DIR" "$ICONSET_DIR"
-cp "$ROOT_DIR/Info.plist" "$APP_DIR/Contents/Info.plist"
+cp "$ROOT_DIR/Info.plist" "$APP_INFO_PLIST"
+
+if [[ -n "$APP_VERSION" ]]; then
+  /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $APP_VERSION" "$APP_INFO_PLIST"
+fi
+
+if [[ -n "$APP_BUILD_NUMBER" ]]; then
+  /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $APP_BUILD_NUMBER" "$APP_INFO_PLIST"
+fi
 
 if ! xcrun actool --version >"$ACTOOL_LOG" 2>&1; then
   fail_actool "startup check"
