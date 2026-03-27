@@ -110,12 +110,12 @@ actor TelepresenceCLI {
         }
     }
 
-    func connect() async -> CommandOutcome {
-        let connectArguments = await connectArguments()
+    func connect(namespace: String? = nil) async -> CommandOutcome {
+        let connectArguments = await connectArguments(namespace: namespace)
         return await runCommand(arguments: connectArguments, successSummary: "Telepresence connected.")
     }
 
-    func reconnect() async -> CommandOutcome {
+    func reconnect(namespace: String? = nil) async -> CommandOutcome {
         guard let executable = await resolveExecutable() else {
             return CommandOutcome(
                 success: false,
@@ -147,7 +147,7 @@ actor TelepresenceCLI {
 
             let connectResult = try await ProcessRunner.run(
                 executable: executable,
-                arguments: await connectArguments(),
+                arguments: await connectArguments(namespace: namespace),
                 environment: environment
             )
 
@@ -179,10 +179,13 @@ actor TelepresenceCLI {
         await runCommand(arguments: ["quit"], successSummary: "Telepresence disconnected.")
     }
 
-    private func connectArguments() async -> [String] {
+    private func connectArguments(namespace: String?) async -> [String] {
         var arguments = ["connect"]
         if let context = await currentKubernetesContext() {
             arguments.append(contentsOf: ["--context", context])
+        }
+        if let namespace = namespace?.trimmingCharacters(in: .whitespacesAndNewlines), !namespace.isEmpty {
+            arguments.append(contentsOf: ["--namespace", namespace])
         }
         return arguments
     }

@@ -22,6 +22,13 @@ struct ReconMenuView: View {
         }
     }
 
+    private var isNamespaceRowInteractive: Bool {
+        controller.snapshot.state == .connected &&
+        controller.isRunningCommand == false &&
+        controller.targetMetadata.context != nil &&
+        controller.namespacePickerOptions.isEmpty == false
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             statusHeaderSection
@@ -47,9 +54,6 @@ struct ReconMenuView: View {
                 switchingHint
                     .padding(.top, 8)
             }
-
-            kubeconfigSection
-                .padding(.top, 20)
 
             actionsSection
                 .padding(.top, 20)
@@ -146,7 +150,23 @@ struct ReconMenuView: View {
 
             MenuCard {
                 MenuCardRow {
-                    MetadataRow(key: "Kubeconfig", value: controller.displayKubeconfig)
+                    KubeconfigPickerMetadataRow(
+                        key: "Kubeconfig",
+                        value: controller.displayKubeconfig,
+                        isInteractive: controller.isKubeconfigRowInteractive,
+                        options: controller.kubeconfigPickerOptions,
+                        selection: Binding<String?>(
+                            get: { controller.selectedKubeconfigPickerOptionID },
+                            set: { newValue in
+                                guard let newValue else { return }
+                                if newValue == "kubeconfig:choose-file" {
+                                    browseForKubeconfig()
+                                } else {
+                                    controller.selectKubeconfigPickerOption(withID: newValue)
+                                }
+                            }
+                        )
+                    )
                 }
 
                 InsetDivider()
@@ -163,10 +183,21 @@ struct ReconMenuView: View {
                 InsetDivider()
 
                 MenuCardRow {
-                    MetadataRow(
+                    NamespacePickerMetadataRow(
                         key: "Namespace",
                         value: controller.displayNamespace,
-                        dimmed: controller.targetMetadata.isLastKnown
+                        dimmed: controller.targetMetadata.isLastKnown,
+                        showsOverrideAnnotation: controller.namespaceOverride != nil,
+                        isInteractive: isNamespaceRowInteractive,
+                        isLoading: controller.isLoadingNamespacePickerOptions,
+                        options: controller.namespacePickerOptions,
+                        selection: Binding<String?>(
+                            get: { controller.selectedNamespacePickerOptionID },
+                            set: { newValue in
+                                guard let newValue else { return }
+                                controller.selectNamespacePickerOption(withID: newValue)
+                            }
+                        )
                     )
                 }
             }
@@ -178,43 +209,6 @@ struct ReconMenuView: View {
             .font(.system(size: 11, weight: .regular))
             .foregroundStyle(.tertiary)
             .fixedSize(horizontal: false, vertical: true)
-    }
-
-    private var kubeconfigSection: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            MenuSectionHeading(title: "SWITCH KUBECONFIG")
-
-            HStack(alignment: .center, spacing: 10) {
-                Picker(
-                    selection: Binding<String?>(
-                        get: { controller.selectedKubeconfigPath },
-                        set: { newValue in
-                            guard let newValue else { return }
-                            controller.addAndSelectKubeconfig(path: newValue)
-                        }
-                    )
-                ) {
-                    ForEach(controller.kubeconfigOptions) { option in
-                        Text(option.displayName).tag(Optional(option.path))
-                    }
-                } label: {
-                    Text(controller.kubeconfigPickerLabel)
-                        .font(.system(size: 12, weight: .regular))
-                }
-                .pickerStyle(.menu)
-                .disabled(controller.isSwitchingKubeconfig || controller.kubeconfigOptions.isEmpty)
-                .frame(maxWidth: .infinity, alignment: .leading)
-
-                Button("Choose…") {
-                    browseForKubeconfig()
-                }
-                .buttonStyle(.plain)
-                .font(.system(size: 12, weight: .regular))
-                .foregroundStyle(.secondary)
-            }
-        }
-        .disabled(controller.isSwitchingKubeconfig)
-        .opacity(controller.isSwitchingKubeconfig ? 0.6 : 1)
     }
 
     @ViewBuilder
@@ -276,7 +270,8 @@ struct ReconMenuView: View {
                     NSApplication.shared.terminate(nil)
                 }
             }
-            .frame(height: 32)
+            .padding(.top, 12)
+            .padding(.bottom, 4)
         }
     }
 
@@ -338,6 +333,117 @@ private struct MetadataRow: View {
                 .foregroundStyle(dimmed ? AnyShapeStyle(.tertiary) : AnyShapeStyle(valueColor ?? .primary))
                 .multilineTextAlignment(.trailing)
                 .lineLimit(2)
+        }
+    }
+}
+
+private struct NamespacePickerMetadataRow: View {
+    let key: String
+    let value: String
+    let dimmed: Bool
+    let showsOverrideAnnotation: Bool
+    let isInteractive: Bool
+    let isLoading: Bool
+    let options: [NamespacePickerOption]
+    let selection: Binding<String?>
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 12) {
+            Text(key)
+                .font(.system(size: 11, weight: .regular))
+                .foregroundStyle(.secondary)
+
+            Spacer(minLength: 12)
+
+            if isInteractive {
+                Picker(
+                    selection: selection
+                ) {
+                    ForEach(options) { option in
+                        Text(option.title).tag(Optional(option.id))
+                    }
+                } label: {
+                    namespaceValueLabel
+                }
+                .pickerStyle(.menu)
+                .labelsHidden()
+            } else {
+                namespaceValueLabel
+            }
+        }
+    }
+
+    private var namespaceValueLabel: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            Text(value)
+                .font(.system(size: 11, weight: .regular, design: .monospaced))
+                .foregroundStyle(dimmed ? AnyShapeStyle(.tertiary) : AnyShapeStyle(.primary))
+                .multilineTextAlignment(.trailing)
+                .lineLimit(2)
+
+            if showsOverrideAnnotation {
+                Text("(override)")
+                    .font(.system(size: 9, weight: .regular))
+                    .foregroundStyle(.tertiary)
+            }
+
+            if isLoading {
+                ProgressView()
+                    .controlSize(.mini)
+                    .tint(Color(nsColor: .tertiaryLabelColor))
+            } else if isInteractive {
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(.tertiary)
+            }
+        }
+    }
+}
+
+private struct KubeconfigPickerMetadataRow: View {
+    let key: String
+    let value: String
+    let isInteractive: Bool
+    let options: [KubeconfigPickerOption]
+    let selection: Binding<String?>
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 12) {
+            Text(key)
+                .font(.system(size: 11, weight: .regular))
+                .foregroundStyle(.secondary)
+
+            Spacer(minLength: 12)
+
+            if isInteractive {
+                Picker(selection: selection) {
+                    ForEach(options) { option in
+                        Text(option.title).tag(Optional(option.id))
+                    }
+                } label: {
+                    kubeconfigValueLabel
+                }
+                .pickerStyle(.menu)
+                .labelsHidden()
+            } else {
+                kubeconfigValueLabel
+            }
+        }
+    }
+
+    private var kubeconfigValueLabel: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            Text(value)
+                .font(.system(size: 11, weight: .regular, design: .monospaced))
+                .foregroundStyle(.primary)
+                .multilineTextAlignment(.trailing)
+                .lineLimit(2)
+
+            if isInteractive {
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(.tertiary)
+            }
         }
     }
 }
@@ -414,14 +520,10 @@ private struct PreferencesMenuItem: View {
 private struct FooterQuitButton: View {
     let action: () -> Void
 
-    @State private var isHovering = false
-
     var body: some View {
         Button("Quit", action: action)
-            .buttonStyle(.plain)
-            .font(.system(size: 11, weight: .regular))
-            .foregroundStyle(Color(nsColor: isHovering ? .labelColor : .secondaryLabelColor))
-            .onHover { isHovering = $0 }
+            .buttonStyle(MenuActionButtonStyle(variant: .danger))
+            .frame(width: 88)
     }
 }
 
@@ -473,8 +575,10 @@ private struct MenuActionButtonStyle: ButtonStyle {
 }
 
 private struct ProductionBadge: View {
+    var label = "PRODUCTION"
+
     var body: some View {
-        Text("PRODUCTION")
+        Text(label)
             .font(.system(size: 10, weight: .semibold))
             .foregroundStyle(.red)
             .padding(.horizontal, 8)

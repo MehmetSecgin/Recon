@@ -13,6 +13,8 @@ final class AppSettingsStore: ObservableObject {
     private enum DefaultsKey {
         static let selectedKubeconfigPath = "Recon.SelectedKubeconfigPath"
         static let rememberedKubeconfigPaths = "Recon.RememberedKubeconfigPaths"
+        static let namespaceOverridesByContext = "Recon.NamespaceOverridesByContext"
+        static let recentNamespacesByContext = "Recon.RecentNamespacesByContext"
         static let hasExplicitKubeconfigSelection = "Recon.HasExplicitKubeconfigSelection"
         static let pollingIntervalSeconds = "Recon.PollingIntervalSeconds"
         static let autoReconnectEnabled = "Recon.AutoReconnectEnabled"
@@ -36,6 +38,8 @@ final class AppSettingsStore: ObservableObject {
     @Published private(set) var kubeconfigPreferenceMode: KubeconfigPreferenceMode
     @Published private(set) var selectedKubeconfigPath: String?
     @Published private(set) var rememberedKubeconfigPaths: [String]
+    @Published private(set) var namespaceOverridesByContext: [String: String]
+    @Published private(set) var recentNamespacesByContext: [String: [String]]
     @Published private(set) var notificationToggles: [AppNotificationEvent: Bool]
 
     private let defaults: UserDefaults
@@ -64,6 +68,8 @@ final class AppSettingsStore: ObservableObject {
         selectedKubeconfigPath = legacySelectedPath
 
         rememberedKubeconfigPaths = Self.normalize(paths: defaults.stringArray(forKey: DefaultsKey.rememberedKubeconfigPaths) ?? [])
+        namespaceOverridesByContext = Self.normalize(namespaceOverrides: defaults.dictionary(forKey: DefaultsKey.namespaceOverridesByContext) as? [String: String] ?? [:])
+        recentNamespacesByContext = Self.normalize(recentNamespacesByContext: defaults.dictionary(forKey: DefaultsKey.recentNamespacesByContext) as? [String: [String]] ?? [:])
         notificationToggles = Self.loadNotificationToggles(from: defaults)
 
         persistCanonicalState()
@@ -158,6 +164,60 @@ final class AppSettingsStore: ObservableObject {
         defaults.set(normalizedPaths, forKey: DefaultsKey.rememberedKubeconfigPaths)
     }
 
+    func override(for context: String) -> String? {
+        guard let normalizedContext = Self.normalize(contextKey: context) else {
+            return nil
+        }
+
+        return namespaceOverridesByContext[normalizedContext]
+    }
+
+    func setOverride(_ namespace: String, for context: String) {
+        guard let normalizedContext = Self.normalize(contextKey: context),
+              let normalizedNamespace = Self.normalize(namespace: namespace) else {
+            return
+        }
+
+        guard namespaceOverridesByContext[normalizedContext] != normalizedNamespace else { return }
+        namespaceOverridesByContext[normalizedContext] = normalizedNamespace
+        defaults.set(namespaceOverridesByContext, forKey: DefaultsKey.namespaceOverridesByContext)
+    }
+
+    func clearOverride(for context: String) {
+        guard let normalizedContext = Self.normalize(contextKey: context),
+              namespaceOverridesByContext.removeValue(forKey: normalizedContext) != nil else {
+            return
+        }
+
+        defaults.set(namespaceOverridesByContext, forKey: DefaultsKey.namespaceOverridesByContext)
+    }
+
+    func recentNamespaces(for context: String) -> [String] {
+        guard let normalizedContext = Self.normalize(contextKey: context) else {
+            return []
+        }
+
+        return recentNamespacesByContext[normalizedContext] ?? []
+    }
+
+    func recordRecentNamespace(_ namespace: String, for context: String) {
+        guard let normalizedContext = Self.normalize(contextKey: context),
+              let normalizedNamespace = Self.normalize(namespace: namespace) else {
+            return
+        }
+
+        var updated = recentNamespacesByContext[normalizedContext] ?? []
+        updated.removeAll { $0 == normalizedNamespace }
+        updated.insert(normalizedNamespace, at: 0)
+        if updated.count > 10 {
+            updated = Array(updated.prefix(10))
+        }
+
+        guard recentNamespacesByContext[normalizedContext] != updated else { return }
+        recentNamespacesByContext[normalizedContext] = updated
+        defaults.set(recentNamespacesByContext, forKey: DefaultsKey.recentNamespacesByContext)
+    }
+
     func makeEnvironmentSnapshot() -> EnvironmentSettingsSnapshot {
         EnvironmentSettingsSnapshot(
             kubeconfigPreferenceMode: kubeconfigPreferenceMode,
@@ -171,6 +231,8 @@ final class AppSettingsStore: ObservableObject {
         defaults.set(pollingInterval.rawValue, forKey: DefaultsKey.pollingIntervalSeconds)
         defaults.set(kubeconfigPreferenceMode.rawValue, forKey: DefaultsKey.kubeconfigPreferenceMode)
         defaults.set(rememberedKubeconfigPaths, forKey: DefaultsKey.rememberedKubeconfigPaths)
+        defaults.set(namespaceOverridesByContext, forKey: DefaultsKey.namespaceOverridesByContext)
+        defaults.set(recentNamespacesByContext, forKey: DefaultsKey.recentNamespacesByContext)
         persist(path: telepresencePathOverride, key: DefaultsKey.telepresencePathOverride)
         persist(path: kubectlPathOverride, key: DefaultsKey.kubectlPathOverride)
         persist(path: selectedKubeconfigPath, key: DefaultsKey.selectedKubeconfigPath)
@@ -243,5 +305,49 @@ final class AppSettingsStore: ObservableObject {
 
     private static func normalize(paths: [String]) -> [String] {
         Array(Set(paths.compactMap(normalize(path:)))).sorted()
+    }
+
+    private static func normalize(contextKey: String) -> String? {
+        let trimmed = contextKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private static func normalize(namespace: String?) -> String? {
+        let trimmed = namespace?.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let trimmed, !trimmed.isEmpty else {
+            return nil
+        }
+
+        return trimmed
+    }
+
+    private static func normalize(namespaceOverrides: [String: String]) -> [String: String] {
+        namespaceOverrides.reduce(into: [String: String]()) { result, element in
+            guard let context = normalize(contextKey: element.key),
+                  let namespace = normalize(namespace: element.value) else {
+                return
+            }
+
+            result[context] = namespace
+        }
+    }
+
+    private static func normalize(recentNamespacesByContext: [String: [String]]) -> [String: [String]] {
+        recentNamespacesByContext.reduce(into: [String: [String]]()) { result, element in
+            guard let context = normalize(contextKey: element.key) else {
+                return
+            }
+
+            let namespaces = element.value
+                .compactMap { normalize(namespace: $0) }
+                .reduce(into: [String]()) { seenNamespaces, namespace in
+                    if seenNamespaces.contains(namespace) == false {
+                        seenNamespaces.append(namespace)
+                    }
+                }
+
+            guard namespaces.isEmpty == false else { return }
+            result[context] = Array(namespaces.prefix(10))
+        }
     }
 }
