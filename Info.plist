@@ -30,5 +30,11 @@
 	<true/>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
+	<key>ReconGitHubRepository</key>
+	<string>mehmetsecgin/Recon</string>
+	<key>ReconInstallerScriptURL</key>
+	<string>https://raw.githubusercontent.com/mehmetsecgin/Recon/main/install.sh</string>
+	<key>ReconReleaseAssetName</key>
+	<string>Recon.app.zip</string>
 </dict>
 </plist>

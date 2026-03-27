@@ -61,6 +61,9 @@ struct ReconMenuView: View {
             preferencesSection
                 .padding(.top, 20)
 
+            updateSection
+                .padding(.top, 14)
+
             footerSection
                 .padding(.top, 16)
         }
@@ -70,6 +73,7 @@ struct ReconMenuView: View {
         .background(MenuWindowConfigurator())
         .onAppear {
             controller.refreshNow()
+            controller.refreshUpdateStatusIfNeeded()
         }
     }
 
@@ -254,6 +258,16 @@ struct ReconMenuView: View {
                 PreferencesWindowPresenter.present(using: openWindow)
             }
         }
+    }
+
+    private var updateSection: some View {
+        UpdateMenuItem(
+            title: controller.appUpdateTitle,
+            detail: controller.appUpdateDetail,
+            actionTitle: controller.appUpdateActionTitle,
+            isChecking: controller.isPerformingUpdateAction,
+            action: controller.handleAppUpdateAction
+        )
     }
 
     private var footerSection: some View {
@@ -523,6 +537,78 @@ private struct FooterQuitButton: View {
         Button("Quit", action: action)
             .buttonStyle(MenuActionButtonStyle(variant: .danger))
             .frame(width: 88)
+    }
+}
+
+private struct UpdateMenuItem: View {
+    let title: String
+    let detail: String
+    let actionTitle: String?
+    let isChecking: Bool
+    let action: () -> Void
+
+    @State private var isHovering = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 10) {
+                Image(systemName: iconName)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(iconColor)
+                    .frame(width: 14)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title)
+                        .font(.system(size: 12, weight: .regular))
+                        .foregroundStyle(Color(nsColor: .labelColor))
+
+                    Text(detail)
+                        .font(.system(size: 11, weight: .regular))
+                        .foregroundStyle(Color(nsColor: .tertiaryLabelColor))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                Spacer(minLength: 8)
+
+                if isChecking {
+                    ProgressView()
+                        .controlSize(.small)
+                } else if let actionTitle {
+                    Text(actionTitle)
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(Color.accentColor)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(Color.accentColor.opacity(0.12), in: Capsule())
+                }
+            }
+            .padding(.vertical, 8)
+            .padding(.horizontal, 10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(isHovering ? Color.white.opacity(0.06) : Color.clear)
+            )
+        }
+        .buttonStyle(.plain)
+        .disabled(isChecking)
+        .onHover { isHovering = $0 }
+    }
+
+    private var iconName: String {
+        if actionTitle == "Update" {
+            return "arrow.down.circle"
+        }
+
+        return "arrow.trianglehead.2.clockwise.rotate.90"
+    }
+
+    private var iconColor: Color {
+        if actionTitle == "Update" {
+            return .accentColor
+        }
+
+        return Color(nsColor: .secondaryLabelColor)
     }
 }
 
