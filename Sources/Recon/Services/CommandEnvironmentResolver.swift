@@ -8,22 +8,17 @@ struct ResolvedKubeconfigSource: Equatable {
 
 actor CommandEnvironmentResolver {
     private let fileManager = FileManager.default
+    private var kubeconfigPreferenceMode: KubeconfigPreferenceMode = .pinned
     private var pinnedKubeconfigPath: String?
+    private var telepresencePathOverride: String?
+    private var kubectlPathOverride: String?
     private var cachedShellPath: String?
 
-    func setPinnedKubeconfigPath(_ path: String?) {
-        let normalizedPath = path?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .nilIfEmpty
-            .map(normalize(path:))
-
-        pinnedKubeconfigPath = normalizedPath
-
-        if let normalizedPath {
-            setenv("KUBECONFIG", normalizedPath, 1)
-        } else {
-            unsetenv("KUBECONFIG")
-        }
+    func apply(settings: AppSettingsStore.EnvironmentSettingsSnapshot) {
+        kubeconfigPreferenceMode = settings.kubeconfigPreferenceMode
+        pinnedKubeconfigPath = settings.selectedKubeconfigPath
+        telepresencePathOverride = settings.telepresencePathOverride
+        kubectlPathOverride = settings.kubectlPathOverride
     }
 
     func executionEnvironment() async -> [String: String] {
@@ -48,7 +43,7 @@ actor CommandEnvironmentResolver {
     }
 
     func resolvedKubeconfigSource() async -> ResolvedKubeconfigSource {
-        if let pinnedKubeconfigPath {
+        if kubeconfigPreferenceMode == .pinned, let pinnedKubeconfigPath {
             return ResolvedKubeconfigSource(
                 display: abbreviate(path: pinnedKubeconfigPath),
                 mode: .pinned,
@@ -90,7 +85,7 @@ actor CommandEnvironmentResolver {
     }
 
     func resolveExecutable(named name: String, envKey: String, wellKnownPaths: [String]) async -> String? {
-        let candidates = ([ProcessInfo.processInfo.environment[envKey]] + wellKnownPaths)
+        let candidates = ([overridePath(for: name)] + [ProcessInfo.processInfo.environment[envKey]] + wellKnownPaths)
             .compactMap { $0?.nilIfEmpty }
 
         for candidate in candidates where fileManager.isExecutableFile(atPath: candidate) {
@@ -102,6 +97,25 @@ actor CommandEnvironmentResolver {
             let candidate = URL(fileURLWithPath: directory).appendingPathComponent(name).path
             if fileManager.isExecutableFile(atPath: candidate) {
                 return candidate
+            }
+        }
+
+        return nil
+    }
+
+    func detectExecutable(named name: String, envKey: String, wellKnownPaths: [String]) async -> String? {
+        let candidates = ([ProcessInfo.processInfo.environment[envKey]] + wellKnownPaths)
+            .compactMap { $0?.nilIfEmpty }
+
+        for candidate in candidates where fileManager.isExecutableFile(atPath: candidate) {
+            return normalize(path: candidate)
+        }
+
+        let pathEntries = await executableSearchPaths()
+        for directory in pathEntries {
+            let candidate = URL(fileURLWithPath: directory).appendingPathComponent(name).path
+            if fileManager.isExecutableFile(atPath: candidate) {
+                return normalize(path: candidate)
             }
         }
 
@@ -177,6 +191,17 @@ actor CommandEnvironmentResolver {
 
     private func abbreviate(path: String) -> String {
         NSString(string: path).abbreviatingWithTildeInPath
+    }
+
+    private func overridePath(for name: String) -> String? {
+        switch name {
+        case "telepresence":
+            return telepresencePathOverride
+        case "kubectl":
+            return kubectlPathOverride
+        default:
+            return nil
+        }
     }
 
     private func normalize(path: String) -> String {

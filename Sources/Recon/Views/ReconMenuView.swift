@@ -2,11 +2,7 @@ import AppKit
 import SwiftUI
 
 struct ReconMenuView: View {
-    @AppStorage("Recon.PollingIntervalSeconds") private var pollingIntervalSeconds = TelepresenceController.PollingIntervalOption.fiveMinutes.rawValue
-    @AppStorage("Recon.AutoReconnectEnabled") private var autoReconnectEnabled = false
-    @AppStorage("Recon.NotificationsEnabled") private var notificationsEnabled = false
-    @AppStorage("Recon.AutoConnectOnLaunchEnabled") private var autoConnectOnLaunchEnabled = false
-    @State private var preferencesExpanded = false
+    @Environment(\.openWindow) private var openWindow
 
     @ObservedObject var controller: TelepresenceController
 
@@ -73,8 +69,6 @@ struct ReconMenuView: View {
         .onAppear {
             controller.refreshNow()
         }
-        .onReceive(controller.$notificationsEnabled) { notificationsEnabled = $0 }
-        .onReceive(controller.$autoConnectOnLaunchEnabled) { autoConnectOnLaunchEnabled = $0 }
     }
 
     private var statusHeaderSection: some View {
@@ -171,7 +165,7 @@ struct ReconMenuView: View {
     }
 
     private var switchingHint: some View {
-        Text("Switching kubeconfig and reconnecting...")
+        Text(controller.snapshot.detailText)
             .font(.system(size: 11, weight: .regular))
             .foregroundStyle(.tertiary)
     }
@@ -258,114 +252,23 @@ struct ReconMenuView: View {
     }
 
     private var preferencesSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Button {
-                withAnimation(.easeInOut(duration: 0.15)) {
-                    preferencesExpanded.toggle()
-                }
-            } label: {
-                HStack(spacing: 8) {
-                    Image(systemName: preferencesExpanded ? "chevron.down" : "chevron.right")
-                        .font(.system(size: 11, weight: .semibold))
+        Button {
+            openWindow(id: "preferences")
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: "gearshape")
+                    .font(.system(size: 12, weight: .semibold))
 
-                    Text("Preferences…")
-                        .font(.system(size: 13, weight: .regular))
+                Text("Preferences…")
+                    .font(.system(size: 13, weight: .regular))
 
-                    Spacer(minLength: 0)
-                }
-                .contentShape(Rectangle())
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.vertical, 2)
+                Spacer(minLength: 0)
             }
-            .buttonStyle(.plain)
-
-            if preferencesExpanded {
-                VStack(alignment: .leading, spacing: 10) {
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("POLLING")
-                            .font(.system(size: 11, weight: .regular))
-                            .foregroundStyle(.tertiary)
-
-                        Picker(
-                            selection: Binding<Int>(
-                                get: { pollingIntervalSeconds },
-                                set: { newValue in
-                                    pollingIntervalSeconds = newValue
-                                    controller.setPollingInterval(seconds: newValue)
-                                }
-                            )
-                        ) {
-                            ForEach(TelepresenceController.PollingIntervalOption.allCases) { option in
-                                Text(option.title).tag(option.rawValue)
-                            }
-                        } label: {
-                            Text(controller.selectedPollingInterval.title)
-                                .font(.system(size: 13, weight: .regular))
-                        }
-                        .pickerStyle(.menu)
-                    }
-
-                    Toggle(
-                        "Launch at login",
-                        isOn: Binding<Bool>(
-                            get: { controller.isLaunchAtLoginEnabled },
-                            set: { newValue in
-                                controller.setLaunchAtLoginEnabled(newValue)
-                            }
-                        )
-                    )
-                    .disabled(controller.isUpdatingLaunchAtLogin)
-
-                    Toggle(
-                        "Auto-reconnect on disconnect",
-                        isOn: Binding<Bool>(
-                            get: { autoReconnectEnabled },
-                            set: { newValue in
-                                autoReconnectEnabled = newValue
-                                controller.setAutoReconnectEnabled(newValue)
-                            }
-                        )
-                    )
-
-                    Toggle(
-                        "Notify on state changes",
-                        isOn: Binding<Bool>(
-                            get: { notificationsEnabled },
-                            set: { newValue in
-                                notificationsEnabled = newValue
-                                controller.setNotificationsEnabled(newValue)
-                            }
-                        )
-                    )
-
-                    Toggle(
-                        "Auto-connect on launch",
-                        isOn: Binding<Bool>(
-                            get: { autoConnectOnLaunchEnabled },
-                            set: { newValue in
-                                autoConnectOnLaunchEnabled = newValue
-                                controller.setAutoConnectOnLaunchEnabled(newValue)
-                            }
-                        )
-                    )
-
-                    if controller.isUpdatingLaunchAtLogin {
-                        Text("Updating launch at login...")
-                            .font(.system(size: 11, weight: .regular))
-                            .foregroundStyle(.tertiary)
-                    }
-
-                    if let settingsStatusMessage = controller.settingsStatusMessage, !settingsStatusMessage.isEmpty {
-                        Text(settingsStatusMessage)
-                            .font(.system(size: 11, weight: .regular))
-                            .foregroundStyle(.tertiary)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                }
-                .padding(.leading, 18)
-                .transition(.opacity.combined(with: .move(edge: .top)))
-            }
+            .contentShape(Rectangle())
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.vertical, 2)
         }
+        .buttonStyle(.plain)
     }
 
     private var footerSection: some View {
