@@ -13,13 +13,35 @@ ASSET_CATALOG_DIR="$ROOT_DIR/Resources/Assets.xcassets"
 ICON_SOURCE_DIR="$ASSET_CATALOG_DIR/AppIcon.appiconset"
 ICONSET_DIR="$ROOT_DIR/build/AppIcon.iconset"
 ICON_FILE="$RESOURCES_DIR/AppIcon.icns"
+ACTOOL_LOG="$(mktemp -t recon-actool.XXXXXX)"
 
 SOURCE_FILES=(${(f)"$(find "$ROOT_DIR/Sources/Recon" -name '*.swift' | sort)"})
+
+cleanup() {
+  rm -f "$ACTOOL_LOG"
+}
+
+fail_actool() {
+  local step="$1"
+
+  printf 'error: actool failed during %s.\n' "$step" >&2
+  printf 'Recon requires a fully initialized local Xcode install for asset catalog compilation.\n' >&2
+  printf 'If Xcode was just installed or updated, run `xcodebuild -runFirstLaunch` and try again.\n' >&2
+  printf '\nactool output:\n' >&2
+  cat "$ACTOOL_LOG" >&2
+  exit 1
+}
+
+trap cleanup EXIT
 
 rm -rf "$APP_DIR"
 rm -rf "$ICONSET_DIR"
 mkdir -p "$MACOS_DIR" "$RESOURCES_DIR" "$ICONSET_DIR"
 cp "$ROOT_DIR/Info.plist" "$APP_DIR/Contents/Info.plist"
+
+if ! xcrun actool --version >"$ACTOOL_LOG" 2>&1; then
+  fail_actool "startup check"
+fi
 
 if ! xcrun actool \
   --compile "$RESOURCES_DIR" \
@@ -27,8 +49,8 @@ if ! xcrun actool \
   --minimum-deployment-target 14.0 \
   --app-icon AppIcon \
   --output-partial-info-plist "$BUILD_DIR/asset-info.plist" \
-  "$ASSET_CATALOG_DIR" >/dev/null; then
-  printf 'warning: actool failed, continuing with AppIcon.icns fallback\n' >&2
+  "$ASSET_CATALOG_DIR" >"$ACTOOL_LOG" 2>&1; then
+  fail_actool "asset catalog compilation"
 fi
 
 cp "$ICON_SOURCE_DIR/16.png" "$ICONSET_DIR/icon_16x16.png"
