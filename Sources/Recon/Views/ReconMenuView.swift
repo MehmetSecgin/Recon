@@ -68,7 +68,6 @@ struct ReconMenuView: View {
         .padding(.vertical, 14)
         .frame(width: 352, alignment: .leading)
         .background(MenuWindowConfigurator())
-        .preferredColorScheme(.dark)
         .onAppear {
             controller.refreshNow()
         }
@@ -711,7 +710,6 @@ private struct MenuWindowConfigurator: NSViewRepresentable {
     private func configureWindow(for view: NSView) {
         DispatchQueue.main.async {
             guard let window = view.window else { return }
-            window.appearance = NSAppearance(named: .darkAqua)
             window.isOpaque = false
             window.backgroundColor = NSColor.windowBackgroundColor
         }

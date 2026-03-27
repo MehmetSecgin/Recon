@@ -3,7 +3,6 @@ import SwiftUI
 
 @main
 struct ReconApp: App {
-    @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var settingsStore: AppSettingsStore
     @StateObject private var controller: TelepresenceController
 
@@ -30,12 +29,6 @@ struct ReconApp: App {
         }
         .defaultSize(width: 500, height: 400)
         .windowResizability(.contentSize)
-    }
-}
-
-private final class AppDelegate: NSObject, NSApplicationDelegate {
-    func applicationDidFinishLaunching(_ notification: Notification) {
-        NSApp.appearance = NSAppearance(named: .darkAqua)
     }
 }
 
