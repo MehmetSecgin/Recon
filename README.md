@@ -82,12 +82,11 @@ This repo includes a GitHub Actions workflow that automatically:
 - zips it as `Recon.app.zip`
 - creates a new GitHub Release when a pull request into `main` is merged
 
-Direct pushes to `main` should be blocked at the repository level. Every change should land through a pull request, and every pull request into `main` must include exactly one of these labels:
+Direct pushes to `main` should be blocked at the repository level, and every change should land through a pull request.
 
-- `release:minor`
-- `release:major`
+When a pull request into `main` merges, the release workflow cuts a new minor release automatically. If you want the merge to cut a major release instead, add the `release:major` label before merging.
 
-When the pull request merges, the release workflow reads that label, computes the next semantic version, and publishes a GitHub Release as `vX.Y.0`.
+That means the normal path is automatic minor releases on every merged PR, with an explicit label only when you want a major bump.
 
 That keeps the installer pointed at the newest published release without timestamp tags or manual packaging steps.
 
@@ -105,7 +104,7 @@ That produces:
 - `build/Recon.app.zip`
 
 Upload `build/Recon.app.zip` to a GitHub Release. The installer script always pulls the latest release.
-If you are using the included GitHub Actions workflow, this upload happens automatically when a labeled PR is merged into `main`.
+If you are using the included GitHub Actions workflow, this upload happens automatically when a pull request is merged into `main`.
 
 ## How It Works
 

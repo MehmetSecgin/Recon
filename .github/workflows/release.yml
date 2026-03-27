@@ -26,13 +26,6 @@ jobs:
         id: version
         run: |
           major_count="$(jq '[.pull_request.labels[].name | select(. == "release:major")] | length' "$GITHUB_EVENT_PATH")"
-          minor_count="$(jq '[.pull_request.labels[].name | select(. == "release:minor")] | length' "$GITHUB_EVENT_PATH")"
-          release_label_count=$((major_count + minor_count))
-
-          if [[ "$release_label_count" -ne 1 ]]; then
-            echo "Merged PRs must carry exactly one release label: release:major or release:minor." >&2
-            exit 1
-          fi
 
           if [[ "$major_count" -eq 1 ]]; then
             bump="major"
