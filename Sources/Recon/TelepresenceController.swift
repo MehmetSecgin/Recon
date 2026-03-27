@@ -68,6 +68,7 @@ final class TelepresenceController: ObservableObject {
     @Published private(set) var namespacePickerOptions: [NamespacePickerOption] = []
     @Published private(set) var isLoadingNamespacePickerOptions = false
     @Published private(set) var appUpdateState: AppUpdateState = .idle
+    @Published private(set) var connectedSince: Date?
 
     let settingsStore: AppSettingsStore
 
@@ -87,6 +88,7 @@ final class TelepresenceController: ObservableObject {
     private var lastNamespacePickerContext: String?
     private var lastUpdateCheckAt: Date?
     private var cancellables = Set<AnyCancellable>()
+    private var diagnosticsEventContinuations: [UUID: AsyncStream<DiagnosticsEvent>.Continuation] = [:]
 
     var statusItemTitle: String {
         switch snapshot.state {
@@ -488,6 +490,15 @@ final class TelepresenceController: ObservableObject {
             resolutionError: nil
         )
 
+        emitDiagnosticsEvent(
+            DiagnosticsEvent(
+                kind: .kubeconfigChanged,
+                context: targetMetadata.context,
+                namespace: targetMetadata.namespace,
+                message: "Kubeconfig changed to \(NSString(string: normalizedPath).abbreviatingWithTildeInPath)."
+            )
+        )
+
         userInitiatedDisconnect = false
         runCommand(
             busyMessage: "Switching kubeconfig and reconnecting...",
@@ -506,6 +517,26 @@ final class TelepresenceController: ObservableObject {
         if isAlreadySelected, mode != .followEnvironment || settingsStore.selectedKubeconfigPath == nil {
             return
         }
+
+        let eventMessage: String
+        switch mode {
+        case .pinned:
+            let pinnedPath = settingsStore.selectedKubeconfigPath.map {
+                NSString(string: $0).abbreviatingWithTildeInPath
+            } ?? "the pinned kubeconfig"
+            eventMessage = "Kubeconfig source changed to \(pinnedPath)."
+        case .followEnvironment:
+            eventMessage = "Kubeconfig source changed to follow $KUBECONFIG."
+        }
+
+        emitDiagnosticsEvent(
+            DiagnosticsEvent(
+                kind: .kubeconfigChanged,
+                context: targetMetadata.context,
+                namespace: targetMetadata.namespace,
+                message: eventMessage
+            )
+        )
 
         userInitiatedDisconnect = false
         runCommand(
@@ -591,6 +622,41 @@ final class TelepresenceController: ObservableObject {
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
         pasteboard.setString("telepresence status", forType: .string)
+    }
+
+    func diagnosticsEventStream() -> AsyncStream<DiagnosticsEvent> {
+        let streamID = UUID()
+        return AsyncStream { continuation in
+            diagnosticsEventContinuations[streamID] = continuation
+            continuation.onTermination = { @Sendable [weak self] _ in
+                Task { @MainActor in
+                    self?.diagnosticsEventContinuations.removeValue(forKey: streamID)
+                }
+            }
+        }
+    }
+
+    func fetchDiagnosticsHealthSnapshot() async -> DiagnosticsHealthSnapshot {
+        do {
+            let baseSnapshot = try await cli.fetchDiagnosticsStatus()
+            return DiagnosticsHealthSnapshot(
+                status: baseSnapshot.status,
+                telepresenceUnavailable: baseSnapshot.telepresenceUnavailable,
+                unavailableReason: baseSnapshot.unavailableReason,
+                connectedSince: connectedSince
+            )
+        } catch {
+            return DiagnosticsHealthSnapshot(
+                status: nil,
+                telepresenceUnavailable: snapshot.state == .unavailable,
+                unavailableReason: error.localizedDescription,
+                connectedSince: connectedSince
+            )
+        }
+    }
+
+    func exportDiagnosticBundle() async -> DiagnosticExportOutcome {
+        await cli.exportDiagnosticBundle()
     }
 
     func openLogs() {
@@ -720,6 +786,14 @@ final class TelepresenceController: ObservableObject {
             if outcome.success == false {
                 lastCommandFailure = outcome
                 if isAutoReconnect {
+                    emitDiagnosticsEvent(
+                        DiagnosticsEvent(
+                            kind: .autoReconnectFailed,
+                            context: targetMetadata.context,
+                            namespace: targetMetadata.namespace,
+                            message: "Auto-reconnect failed for \(connectionSummaryText())."
+                        )
+                    )
                     await postNotification(
                         event: .autoReconnectFailed,
                         title: "Auto-reconnect failed",
@@ -739,7 +813,11 @@ final class TelepresenceController: ObservableObject {
 
         let previousState = snapshot.state
         let updatedSnapshot = await cli.fetchStatus()
+        let recoveredFromAutoReconnect = hasAttemptedAutoReconnectForCurrentDrop &&
+            updatedSnapshot.state == .connected &&
+            previousState != .connected
         snapshot = updatedSnapshot
+        updateConnectedSince(previousState: previousState, nextState: updatedSnapshot.state)
         await refreshTargetMetadata()
         await refreshDetectedExecutables()
         updateDerivedPresentation(for: updatedSnapshot)
@@ -752,9 +830,47 @@ final class TelepresenceController: ObservableObject {
             Task { @MainActor [weak self] in
                 await self?.refreshNamespacePickerOptions(force: previousState != .connected)
             }
+            if recoveredFromAutoReconnect {
+                emitDiagnosticsEvent(
+                    DiagnosticsEvent(
+                        kind: .autoReconnectSucceeded,
+                        context: targetMetadata.context,
+                        namespace: targetMetadata.namespace,
+                        message: "Auto-reconnect succeeded for \(connectionSummaryText())."
+                    )
+                )
+            } else if previousState != .connected {
+                emitDiagnosticsEvent(
+                    DiagnosticsEvent(
+                        kind: .connected,
+                        context: targetMetadata.context,
+                        namespace: targetMetadata.namespace,
+                        message: "Connected to \(connectionSummaryText())."
+                    )
+                )
+            }
         } else if updatedSnapshot.state == .disconnected {
             await namespaceDiscoveryService.clearSessionCache()
             clearNamespacePickerOptions()
+
+            if previousState == .connected {
+                let eventKind: DiagnosticsEvent.Kind = userInitiatedDisconnect ? .disconnectedUser : .disconnectedUnexpected
+                let message: String
+                if userInitiatedDisconnect {
+                    message = "Disconnected from \(connectionSummaryText())."
+                } else {
+                    message = "Connection dropped from \(connectionSummaryText())."
+                }
+
+                emitDiagnosticsEvent(
+                    DiagnosticsEvent(
+                        kind: eventKind,
+                        context: targetMetadata.context,
+                        namespace: targetMetadata.namespace,
+                        message: message
+                    )
+                )
+            }
         }
 
         if previousState == .connected && updatedSnapshot.state == .disconnected {
@@ -1036,6 +1152,29 @@ final class TelepresenceController: ObservableObject {
         }
 
         errorPresentation = nil
+    }
+
+    private func updateConnectedSince(
+        previousState: TelepresenceStatusSnapshot.State,
+        nextState: TelepresenceStatusSnapshot.State
+    ) {
+        if nextState == .connected && previousState != .connected {
+            connectedSince = .now
+        } else if nextState != .connected {
+            connectedSince = nil
+        }
+    }
+
+    private func emitDiagnosticsEvent(_ event: DiagnosticsEvent) {
+        for continuation in diagnosticsEventContinuations.values {
+            continuation.yield(event)
+        }
+    }
+
+    private func connectionSummaryText() -> String {
+        let context = targetMetadata.context ?? "unknown context"
+        let namespace = targetMetadata.namespace ?? "unknown namespace"
+        return "\(context) / \(namespace)"
     }
 
     private var activeNamespaceOverride: String? {

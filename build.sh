@@ -82,6 +82,7 @@ xcrun swiftc \
   -sdk "$SDK_PATH" \
   -parse-as-library \
   -framework UserNotifications \
+  -lsqlite3 \
   -o "$MACOS_DIR/Recon" \
   "${SOURCE_FILES[@]}"
 

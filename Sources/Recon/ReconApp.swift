@@ -5,11 +5,14 @@ import SwiftUI
 struct ReconApp: App {
     @StateObject private var settingsStore: AppSettingsStore
     @StateObject private var controller: TelepresenceController
+    @StateObject private var diagnosticsViewModel: DiagnosticsViewModel
 
     init() {
         let settingsStore = AppSettingsStore()
+        let controller = TelepresenceController(settingsStore: settingsStore)
         _settingsStore = StateObject(wrappedValue: settingsStore)
-        _controller = StateObject(wrappedValue: TelepresenceController(settingsStore: settingsStore))
+        _controller = StateObject(wrappedValue: controller)
+        _diagnosticsViewModel = StateObject(wrappedValue: DiagnosticsViewModel(controller: controller))
     }
 
     var body: some Scene {
@@ -28,6 +31,12 @@ struct ReconApp: App {
             PreferencesWindowView(controller: controller, settingsStore: settingsStore)
         }
         .defaultSize(width: 500, height: 400)
+        .windowResizability(.contentSize)
+
+        Window("Recon — Diagnostics", id: AppWindowID.diagnostics) {
+            DiagnosticsWindowView(viewModel: diagnosticsViewModel)
+        }
+        .defaultSize(width: 560, height: 520)
         .windowResizability(.contentSize)
     }
 }
