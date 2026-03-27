@@ -2,6 +2,11 @@ import AppKit
 import SwiftUI
 
 struct PreferencesWindowView: View {
+    private enum ActiveDropdown: String {
+        case pollingInterval
+        case kubeconfigMode
+    }
+
     enum Tab: Hashable, CaseIterable {
         case general
         case notifications
@@ -33,23 +38,37 @@ struct PreferencesWindowView: View {
     @ObservedObject var controller: TelepresenceController
     @ObservedObject var settingsStore: AppSettingsStore
     @State private var selectedTab: Tab = .general
+    @State private var activeDropdown: ActiveDropdown?
+    @State private var window: NSWindow?
 
     var body: some View {
-        VStack(spacing: 0) {
-            tabBar
+        ZStack(alignment: .topLeading) {
+            VStack(spacing: 0) {
+                windowHeader
+                tabBar
 
-            ScrollView {
-                VStack(alignment: .leading, spacing: 0) {
-                    currentTabContent
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 0) {
+                        currentTabContent
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 16)
+                    .padding(.top, 12)
+                    .padding(.bottom, 16)
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 16)
-                .padding(.top, 12)
-                .padding(.bottom, 16)
             }
         }
+        .overlayPreferenceValue(ReconDropdownAnchorPreferenceKey.self) { anchors in
+            GeometryReader { proxy in
+                preferencesDropdownOverlay(anchors: anchors, proxy: proxy)
+            }
+        }
+        .background(ReconDismissOnEscape(isEnabled: activeDropdown != nil) {
+            activeDropdown = nil
+        })
         .frame(width: 500, height: 400)
-        .background(PreferencesWindowConfigurator())
+        .background(ReconTheme.windowBackground)
+        .background(PreferencesWindowConfigurator(window: $window))
     }
 
     private var tabBar: some View {
@@ -66,12 +85,16 @@ struct PreferencesWindowView: View {
                             Text(tab.title)
                                 .font(.system(size: 12, weight: selectedTab == tab ? .medium : .regular))
                         }
-                        .foregroundStyle(Color(nsColor: .labelColor))
+                        .foregroundStyle(selectedTab == tab ? ReconTheme.textPrimary : ReconTheme.textSecondary)
                         .padding(.horizontal, 12)
                         .padding(.vertical, 6)
                         .background(
                             Capsule(style: .continuous)
-                                .fill(selectedTab == tab ? Color(nsColor: .controlBackgroundColor) : Color.clear)
+                                .fill(selectedTab == tab ? ReconTheme.panelRaised : Color.clear)
+                        )
+                        .overlay(
+                            Capsule(style: .continuous)
+                                .stroke(selectedTab == tab ? ReconTheme.panelBorder : Color.clear, lineWidth: 1)
                         )
                     }
                     .buttonStyle(.plain)
@@ -80,11 +103,47 @@ struct PreferencesWindowView: View {
                 Spacer(minLength: 0)
             }
             .padding(.horizontal, 16)
-            .padding(.top, 14)
+            .padding(.top, 12)
             .padding(.bottom, 12)
 
             Rectangle()
-                .fill(Color(nsColor: .separatorColor))
+                .fill(ReconTheme.divider)
+                .frame(height: 0.5)
+        }
+    }
+
+    private var windowHeader: some View {
+        HStack(spacing: 14) {
+            HStack(spacing: 8) {
+                ReconWindowControlButton(kind: .close) {
+                    window?.performClose(nil)
+                }
+
+                ReconWindowControlButton(kind: .minimize) {
+                    window?.miniaturize(nil)
+                }
+            }
+            .frame(width: 54, alignment: .leading)
+
+            Spacer(minLength: 0)
+
+            Text("Recon Preferences")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(ReconTheme.textPrimary)
+
+            Spacer(minLength: 0)
+
+            Rectangle()
+                .fill(Color.clear)
+                .frame(width: 54, height: 1)
+        }
+        .padding(.horizontal, 16)
+        .padding(.top, 14)
+        .padding(.bottom, 10)
+        .background(ReconTheme.titlebarBackground)
+        .overlay(alignment: .bottom) {
+            Rectangle()
+                .fill(ReconTheme.divider)
                 .frame(height: 0.5)
         }
     }
@@ -114,6 +173,7 @@ struct PreferencesWindowView: View {
                             )
                         )
                         .labelsHidden()
+                        .toggleStyle(ReconToggleStyle())
                         .disabled(controller.isUpdatingLaunchAtLogin)
                     }
 
@@ -128,6 +188,7 @@ struct PreferencesWindowView: View {
                             )
                         )
                         .labelsHidden()
+                        .toggleStyle(ReconToggleStyle())
                     }
                 }
             }
@@ -135,7 +196,7 @@ struct PreferencesWindowView: View {
             if controller.isUpdatingLaunchAtLogin {
                 Text("Updating launch at login...")
                     .font(.system(size: 11, weight: .regular))
-                    .foregroundStyle(Color(nsColor: .tertiaryLabelColor))
+                    .foregroundStyle(ReconTheme.textMuted)
                     .padding(.top, 8)
             }
 
@@ -154,25 +215,23 @@ struct PreferencesWindowView: View {
                             )
                         )
                         .labelsHidden()
+                        .toggleStyle(ReconToggleStyle())
                     }
 
                     PreferencesInsetDivider()
 
                     PreferenceControlRow(title: "Polling interval") {
-                        Picker(
-                            "Polling interval",
-                            selection: Binding(
-                                get: { settingsStore.pollingInterval },
-                                set: { settingsStore.setPollingInterval($0) }
-                            )
+                        ReconDropdownTrigger(
+                            id: ActiveDropdown.pollingInterval.rawValue,
+                            isEnabled: true,
+                            action: { toggleDropdown(.pollingInterval) }
                         ) {
-                            ForEach(PollingIntervalOption.displayChoices(including: settingsStore.pollingInterval)) { option in
-                                Text(option.title).tag(option)
-                            }
+                            ReconSettingsMenuLabel(
+                                title: settingsStore.pollingInterval.title,
+                                width: 160,
+                                isOpen: activeDropdown == .pollingInterval
+                            )
                         }
-                        .labelsHidden()
-                        .pickerStyle(.menu)
-                        .frame(width: 160, alignment: .trailing)
                     }
                 }
             }
@@ -253,20 +312,17 @@ struct PreferencesWindowView: View {
             ) {
                 PreferencesCard {
                     PreferenceControlRow(title: "Kubeconfig mode") {
-                        Picker(
-                            "Kubeconfig mode",
-                            selection: Binding(
-                                get: { settingsStore.kubeconfigPreferenceMode },
-                                set: { controller.changeKubeconfigPreferenceMode(to: $0) }
-                            )
+                        ReconDropdownTrigger(
+                            id: ActiveDropdown.kubeconfigMode.rawValue,
+                            isEnabled: true,
+                            action: { toggleDropdown(.kubeconfigMode) }
                         ) {
-                            ForEach(KubeconfigPreferenceMode.allCases) { mode in
-                                Text(mode.title).tag(mode)
-                            }
+                            ReconSettingsMenuLabel(
+                                title: settingsStore.kubeconfigPreferenceMode.title,
+                                width: 180,
+                                isOpen: activeDropdown == .kubeconfigMode
+                            )
                         }
-                        .labelsHidden()
-                        .pickerStyle(.menu)
-                        .frame(width: 180, alignment: .trailing)
                     }
 
                     PreferencesInsetDivider()
@@ -306,9 +362,136 @@ struct PreferencesWindowView: View {
         if let settingsStatusMessage = controller.settingsStatusMessage, !settingsStatusMessage.isEmpty {
             Text(settingsStatusMessage)
                 .font(.system(size: 12, weight: .regular))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(ReconTheme.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
+    }
+
+    private func preferencesDropdownOverlay(
+        anchors: [String: Anchor<CGRect>],
+        proxy: GeometryProxy
+    ) -> some View {
+        if let activeDropdown, let anchor = anchors[activeDropdown.rawValue] {
+            let rect = proxy[anchor]
+
+            return AnyView(
+                ZStack(alignment: .topLeading) {
+                    Color.black.opacity(0.001)
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            self.activeDropdown = nil
+                        }
+
+                    dropdownPanel(for: activeDropdown)
+                        .frame(width: dropdownWidth(for: activeDropdown, triggerRect: rect))
+                        .offset(
+                            x: dropdownOriginX(for: activeDropdown, triggerRect: rect, containerSize: proxy.size),
+                            y: dropdownOriginY(for: activeDropdown, triggerRect: rect, containerSize: proxy.size)
+                        )
+                }
+                .zIndex(10)
+            )
+        }
+
+        return AnyView(EmptyView())
+    }
+
+    @ViewBuilder
+    private func dropdownPanel(for dropdown: ActiveDropdown) -> some View {
+        switch dropdown {
+        case .pollingInterval:
+            ReconDropdownPanel(
+                options: PollingIntervalOption.displayChoices(including: settingsStore.pollingInterval),
+                selectedID: settingsStore.pollingInterval.id,
+                width: 180,
+                maxHeight: 220,
+                onSelect: { option in
+                    activeDropdown = nil
+                    settingsStore.setPollingInterval(option)
+                }
+            ) { option, isSelected, _ in
+                preferencesDropdownRow(title: option.title, isSelected: isSelected)
+            }
+        case .kubeconfigMode:
+            ReconDropdownPanel(
+                options: KubeconfigPreferenceMode.allCases,
+                selectedID: settingsStore.kubeconfigPreferenceMode.id,
+                width: 210,
+                maxHeight: 180,
+                onSelect: { option in
+                    activeDropdown = nil
+                    controller.changeKubeconfigPreferenceMode(to: option)
+                }
+            ) { option, isSelected, _ in
+                preferencesDropdownRow(title: option.title, isSelected: isSelected)
+            }
+        }
+    }
+
+    private func preferencesDropdownRow(title: String, isSelected: Bool) -> some View {
+        HStack(spacing: 10) {
+            Text(title)
+                .font(.system(size: 11, weight: isSelected ? .semibold : .regular))
+                .foregroundStyle(ReconTheme.textPrimary)
+
+            if isSelected {
+                Spacer(minLength: 8)
+                Image(systemName: "checkmark")
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundStyle(ReconTheme.accent)
+            }
+        }
+    }
+
+    private func toggleDropdown(_ dropdown: ActiveDropdown) {
+        activeDropdown = activeDropdown == dropdown ? nil : dropdown
+    }
+
+    private func dropdownWidth(for dropdown: ActiveDropdown, triggerRect: CGRect) -> CGFloat {
+        switch dropdown {
+        case .pollingInterval:
+            return max(triggerRect.width, 180)
+        case .kubeconfigMode:
+            return max(triggerRect.width, 210)
+        }
+    }
+
+    private func estimatedDropdownHeight(for dropdown: ActiveDropdown) -> CGFloat {
+        let optionCount: Int
+
+        switch dropdown {
+        case .pollingInterval:
+            optionCount = PollingIntervalOption.displayChoices(including: settingsStore.pollingInterval).count
+        case .kubeconfigMode:
+            optionCount = KubeconfigPreferenceMode.allCases.count
+        }
+
+        return min(CGFloat(optionCount) * 38 + 20, 220)
+    }
+
+    private func dropdownOriginX(
+        for dropdown: ActiveDropdown,
+        triggerRect: CGRect,
+        containerSize: CGSize
+    ) -> CGFloat {
+        let width = dropdownWidth(for: dropdown, triggerRect: triggerRect)
+        let preferredX = triggerRect.maxX - width
+        return min(max(16, preferredX), max(16, containerSize.width - width - 16))
+    }
+
+    private func dropdownOriginY(
+        for dropdown: ActiveDropdown,
+        triggerRect: CGRect,
+        containerSize: CGSize
+    ) -> CGFloat {
+        let height = estimatedDropdownHeight(for: dropdown)
+        let belowY = triggerRect.maxY + 8
+
+        if belowY + height <= containerSize.height - 16 {
+            return belowY
+        }
+
+        return max(16, triggerRect.minY - height - 8)
     }
 }
 
@@ -341,7 +524,7 @@ private struct PreferencesSection<Content: View>: View {
             if let hintText, !hintText.isEmpty {
                 Text(hintText)
                     .font(.system(size: 11, weight: .regular))
-                    .foregroundStyle(Color(nsColor: .tertiaryLabelColor))
+                    .foregroundStyle(ReconTheme.textMuted)
                     .fixedSize(horizontal: false, vertical: true)
                     .padding(.top, 8)
             }
@@ -355,7 +538,7 @@ private struct PreferencesSectionHeading: View {
     var body: some View {
         Text(title)
             .font(.system(size: 11, weight: .medium))
-            .foregroundStyle(Color(nsColor: .tertiaryLabelColor))
+            .foregroundStyle(ReconTheme.textMuted)
             .tracking(0.5)
     }
 }
@@ -367,7 +550,11 @@ private struct PreferencesCard<Content: View>: View {
         VStack(spacing: 0) {
             content
         }
-        .background(Color(nsColor: .controlBackgroundColor))
+        .background(ReconTheme.panelBackground)
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(ReconTheme.panelBorder, lineWidth: 1)
+        )
         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
 }
@@ -375,7 +562,7 @@ private struct PreferencesCard<Content: View>: View {
 private struct PreferencesInsetDivider: View {
     var body: some View {
         Rectangle()
-            .fill(Color(nsColor: .separatorColor))
+            .fill(ReconTheme.divider)
             .frame(height: 0.5)
             .padding(.leading, 12)
     }
@@ -389,7 +576,7 @@ private struct PreferenceControlRow<Control: View>: View {
         HStack(alignment: .center, spacing: 12) {
             Text(title)
                 .font(.system(size: 13, weight: .regular))
-                .foregroundStyle(Color(nsColor: .labelColor))
+                .foregroundStyle(ReconTheme.textPrimary)
 
             Spacer(minLength: 12)
 
@@ -411,11 +598,11 @@ private struct NotificationToggleRow: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
                     .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(Color(nsColor: .labelColor))
+                    .foregroundStyle(ReconTheme.textPrimary)
 
                 Text(detail)
                     .font(.system(size: 11, weight: .regular))
-                    .foregroundStyle(Color(nsColor: .secondaryLabelColor))
+                    .foregroundStyle(ReconTheme.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
 
@@ -423,6 +610,7 @@ private struct NotificationToggleRow: View {
 
             Toggle("", isOn: $isOn)
                 .labelsHidden()
+                .toggleStyle(ReconToggleStyle())
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 7)
@@ -437,13 +625,13 @@ private struct AlwaysSuppressedRow: View {
         HStack(alignment: .center, spacing: 12) {
             Text(title)
                 .font(.system(size: 13, weight: .regular))
-                .foregroundStyle(Color(nsColor: .labelColor))
+                .foregroundStyle(ReconTheme.textPrimary)
 
             Spacer(minLength: 12)
 
             Text("Never")
                 .font(.system(size: 11, weight: .regular))
-                .foregroundStyle(Color(nsColor: .tertiaryLabelColor))
+                .foregroundStyle(ReconTheme.textMuted)
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 7)
@@ -459,13 +647,13 @@ private struct PreferenceValueRow: View {
         HStack(alignment: .center, spacing: 12) {
             Text(title)
                 .font(.system(size: 13, weight: .regular))
-                .foregroundStyle(Color(nsColor: .labelColor))
+                .foregroundStyle(ReconTheme.textPrimary)
 
             Spacer(minLength: 12)
 
             Text(value)
                 .font(.system(size: 11, weight: .regular, design: .monospaced))
-                .foregroundStyle(Color(nsColor: .secondaryLabelColor))
+                .foregroundStyle(ReconTheme.textSecondary)
                 .multilineTextAlignment(.trailing)
                 .lineLimit(2)
         }
@@ -487,18 +675,18 @@ private struct PathPreferenceRow: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
                     .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(Color(nsColor: .labelColor))
+                    .foregroundStyle(ReconTheme.textPrimary)
 
                 Text(value)
                     .font(.system(size: 11, weight: .regular, design: .monospaced))
-                    .foregroundStyle(Color(nsColor: .secondaryLabelColor))
+                    .foregroundStyle(ReconTheme.textSecondary)
                     .lineLimit(2)
             }
 
             Spacer(minLength: 12)
 
             Button(buttonTitle, action: action)
-                .buttonStyle(.bordered)
+                .buttonStyle(ReconSecondaryButtonStyle())
                 .disabled(isButtonDisabled)
         }
         .padding(.horizontal, 12)
@@ -516,18 +704,18 @@ private struct LogDirectoryRow: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text("Log directory")
                     .font(.system(size: 13, weight: .regular))
-                    .foregroundStyle(Color(nsColor: .labelColor))
+                    .foregroundStyle(ReconTheme.textPrimary)
 
                 Text(value)
                     .font(.system(size: 11, weight: .regular, design: .monospaced))
-                    .foregroundStyle(Color(nsColor: .secondaryLabelColor))
+                    .foregroundStyle(ReconTheme.textSecondary)
                     .lineLimit(2)
             }
 
             Spacer(minLength: 12)
 
             Button("Reveal", action: action)
-                .buttonStyle(.bordered)
+                .buttonStyle(ReconSecondaryButtonStyle())
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 7)
@@ -535,7 +723,40 @@ private struct LogDirectoryRow: View {
     }
 }
 
+private struct ReconSettingsMenuLabel: View {
+    let title: String
+    let width: CGFloat
+    let isOpen: Bool
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Text(title)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(ReconTheme.textPrimary)
+                .lineLimit(1)
+
+            Spacer(minLength: 8)
+
+            Image(systemName: "chevron.up.chevron.down")
+                .font(.system(size: 9, weight: .semibold))
+                .foregroundStyle(ReconTheme.accent)
+        }
+        .padding(.horizontal, 10)
+        .frame(width: width, height: 30)
+        .background(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(isOpen ? ReconTheme.accentSoft : ReconTheme.panelRaised)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(isOpen ? ReconTheme.selectionBorder : ReconTheme.panelBorder, lineWidth: 1)
+        )
+    }
+}
+
 private struct PreferencesWindowConfigurator: NSViewRepresentable {
+    @Binding var window: NSWindow?
+
     func makeNSView(context: Context) -> NSView {
         let view = NSView(frame: .zero)
         configureWindow(for: view)
@@ -549,10 +770,17 @@ private struct PreferencesWindowConfigurator: NSViewRepresentable {
     private func configureWindow(for view: NSView) {
         DispatchQueue.main.async {
             guard let window = view.window else { return }
+            self.window = window
             window.isOpaque = false
-            window.backgroundColor = NSColor.windowBackgroundColor
+            window.backgroundColor = ReconTheme.windowBackgroundNSColor
+            window.titleVisibility = .hidden
+            window.titlebarAppearsTransparent = true
+            window.styleMask.insert(.fullSizeContentView)
+            window.isMovableByWindowBackground = true
             window.level = .floating
             window.collectionBehavior.insert(.fullScreenAuxiliary)
+            window.standardWindowButton(.closeButton)?.isHidden = true
+            window.standardWindowButton(.miniaturizeButton)?.isHidden = true
             window.standardWindowButton(.zoomButton)?.isHidden = true
         }
     }
