@@ -49,6 +49,7 @@ struct PreferencesWindowView: View {
             }
         }
         .frame(width: 500, height: 400)
+        .background(ReconTheme.windowBackground)
         .background(PreferencesWindowConfigurator())
     }
 
@@ -66,12 +67,16 @@ struct PreferencesWindowView: View {
                             Text(tab.title)
                                 .font(.system(size: 12, weight: selectedTab == tab ? .medium : .regular))
                         }
-                        .foregroundStyle(Color(nsColor: .labelColor))
+                        .foregroundStyle(selectedTab == tab ? ReconTheme.textPrimary : ReconTheme.textSecondary)
                         .padding(.horizontal, 12)
                         .padding(.vertical, 6)
                         .background(
                             Capsule(style: .continuous)
-                                .fill(selectedTab == tab ? Color(nsColor: .controlBackgroundColor) : Color.clear)
+                                .fill(selectedTab == tab ? ReconTheme.panelRaised : Color.clear)
+                        )
+                        .overlay(
+                            Capsule(style: .continuous)
+                                .stroke(selectedTab == tab ? ReconTheme.panelBorder : Color.clear, lineWidth: 1)
                         )
                     }
                     .buttonStyle(.plain)
@@ -84,7 +89,7 @@ struct PreferencesWindowView: View {
             .padding(.bottom, 12)
 
             Rectangle()
-                .fill(Color(nsColor: .separatorColor))
+                .fill(ReconTheme.divider)
                 .frame(height: 0.5)
         }
     }
@@ -114,6 +119,7 @@ struct PreferencesWindowView: View {
                             )
                         )
                         .labelsHidden()
+                        .toggleStyle(ReconToggleStyle())
                         .disabled(controller.isUpdatingLaunchAtLogin)
                     }
 
@@ -128,6 +134,7 @@ struct PreferencesWindowView: View {
                             )
                         )
                         .labelsHidden()
+                        .toggleStyle(ReconToggleStyle())
                     }
                 }
             }
@@ -135,7 +142,7 @@ struct PreferencesWindowView: View {
             if controller.isUpdatingLaunchAtLogin {
                 Text("Updating launch at login...")
                     .font(.system(size: 11, weight: .regular))
-                    .foregroundStyle(Color(nsColor: .tertiaryLabelColor))
+                    .foregroundStyle(ReconTheme.textMuted)
                     .padding(.top, 8)
             }
 
@@ -154,25 +161,22 @@ struct PreferencesWindowView: View {
                             )
                         )
                         .labelsHidden()
+                        .toggleStyle(ReconToggleStyle())
                     }
 
                     PreferencesInsetDivider()
 
                     PreferenceControlRow(title: "Polling interval") {
-                        Picker(
-                            "Polling interval",
-                            selection: Binding(
-                                get: { settingsStore.pollingInterval },
-                                set: { settingsStore.setPollingInterval($0) }
-                            )
-                        ) {
+                        Menu {
                             ForEach(PollingIntervalOption.displayChoices(including: settingsStore.pollingInterval)) { option in
-                                Text(option.title).tag(option)
+                                Button(option.title) {
+                                    settingsStore.setPollingInterval(option)
+                                }
                             }
+                        } label: {
+                            ReconSettingsMenuLabel(title: settingsStore.pollingInterval.title, width: 160)
                         }
-                        .labelsHidden()
-                        .pickerStyle(.menu)
-                        .frame(width: 160, alignment: .trailing)
+                        .menuStyle(ReconMenuTriggerStyle())
                     }
                 }
             }
@@ -253,20 +257,16 @@ struct PreferencesWindowView: View {
             ) {
                 PreferencesCard {
                     PreferenceControlRow(title: "Kubeconfig mode") {
-                        Picker(
-                            "Kubeconfig mode",
-                            selection: Binding(
-                                get: { settingsStore.kubeconfigPreferenceMode },
-                                set: { controller.changeKubeconfigPreferenceMode(to: $0) }
-                            )
-                        ) {
+                        Menu {
                             ForEach(KubeconfigPreferenceMode.allCases) { mode in
-                                Text(mode.title).tag(mode)
+                                Button(mode.title) {
+                                    controller.changeKubeconfigPreferenceMode(to: mode)
+                                }
                             }
+                        } label: {
+                            ReconSettingsMenuLabel(title: settingsStore.kubeconfigPreferenceMode.title, width: 180)
                         }
-                        .labelsHidden()
-                        .pickerStyle(.menu)
-                        .frame(width: 180, alignment: .trailing)
+                        .menuStyle(ReconMenuTriggerStyle())
                     }
 
                     PreferencesInsetDivider()
@@ -339,11 +339,11 @@ private struct PreferencesSection<Content: View>: View {
                 .padding(.top, 6)
 
             if let hintText, !hintText.isEmpty {
-                Text(hintText)
-                    .font(.system(size: 11, weight: .regular))
-                    .foregroundStyle(Color(nsColor: .tertiaryLabelColor))
-                    .fixedSize(horizontal: false, vertical: true)
-                    .padding(.top, 8)
+            Text(hintText)
+                .font(.system(size: 11, weight: .regular))
+                .foregroundStyle(ReconTheme.textMuted)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.top, 8)
             }
         }
     }
@@ -355,7 +355,7 @@ private struct PreferencesSectionHeading: View {
     var body: some View {
         Text(title)
             .font(.system(size: 11, weight: .medium))
-            .foregroundStyle(Color(nsColor: .tertiaryLabelColor))
+            .foregroundStyle(ReconTheme.textMuted)
             .tracking(0.5)
     }
 }
@@ -367,7 +367,11 @@ private struct PreferencesCard<Content: View>: View {
         VStack(spacing: 0) {
             content
         }
-        .background(Color(nsColor: .controlBackgroundColor))
+        .background(ReconTheme.panelBackground)
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(ReconTheme.panelBorder, lineWidth: 1)
+        )
         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
 }
@@ -375,7 +379,7 @@ private struct PreferencesCard<Content: View>: View {
 private struct PreferencesInsetDivider: View {
     var body: some View {
         Rectangle()
-            .fill(Color(nsColor: .separatorColor))
+            .fill(ReconTheme.divider)
             .frame(height: 0.5)
             .padding(.leading, 12)
     }
@@ -389,7 +393,7 @@ private struct PreferenceControlRow<Control: View>: View {
         HStack(alignment: .center, spacing: 12) {
             Text(title)
                 .font(.system(size: 13, weight: .regular))
-                .foregroundStyle(Color(nsColor: .labelColor))
+                .foregroundStyle(ReconTheme.textPrimary)
 
             Spacer(minLength: 12)
 
@@ -411,11 +415,11 @@ private struct NotificationToggleRow: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
                     .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(Color(nsColor: .labelColor))
+                    .foregroundStyle(ReconTheme.textPrimary)
 
                 Text(detail)
                     .font(.system(size: 11, weight: .regular))
-                    .foregroundStyle(Color(nsColor: .secondaryLabelColor))
+                    .foregroundStyle(ReconTheme.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
 
@@ -423,6 +427,7 @@ private struct NotificationToggleRow: View {
 
             Toggle("", isOn: $isOn)
                 .labelsHidden()
+                .toggleStyle(ReconToggleStyle())
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 7)
@@ -437,13 +442,13 @@ private struct AlwaysSuppressedRow: View {
         HStack(alignment: .center, spacing: 12) {
             Text(title)
                 .font(.system(size: 13, weight: .regular))
-                .foregroundStyle(Color(nsColor: .labelColor))
+                .foregroundStyle(ReconTheme.textPrimary)
 
             Spacer(minLength: 12)
 
             Text("Never")
                 .font(.system(size: 11, weight: .regular))
-                .foregroundStyle(Color(nsColor: .tertiaryLabelColor))
+                .foregroundStyle(ReconTheme.textMuted)
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 7)
@@ -459,13 +464,13 @@ private struct PreferenceValueRow: View {
         HStack(alignment: .center, spacing: 12) {
             Text(title)
                 .font(.system(size: 13, weight: .regular))
-                .foregroundStyle(Color(nsColor: .labelColor))
+                .foregroundStyle(ReconTheme.textPrimary)
 
             Spacer(minLength: 12)
 
             Text(value)
                 .font(.system(size: 11, weight: .regular, design: .monospaced))
-                .foregroundStyle(Color(nsColor: .secondaryLabelColor))
+                .foregroundStyle(ReconTheme.textSecondary)
                 .multilineTextAlignment(.trailing)
                 .lineLimit(2)
         }
@@ -487,18 +492,18 @@ private struct PathPreferenceRow: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
                     .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(Color(nsColor: .labelColor))
+                    .foregroundStyle(ReconTheme.textPrimary)
 
                 Text(value)
                     .font(.system(size: 11, weight: .regular, design: .monospaced))
-                    .foregroundStyle(Color(nsColor: .secondaryLabelColor))
+                    .foregroundStyle(ReconTheme.textSecondary)
                     .lineLimit(2)
             }
 
             Spacer(minLength: 12)
 
             Button(buttonTitle, action: action)
-                .buttonStyle(.bordered)
+                .buttonStyle(ReconSecondaryButtonStyle())
                 .disabled(isButtonDisabled)
         }
         .padding(.horizontal, 12)
@@ -516,22 +521,52 @@ private struct LogDirectoryRow: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text("Log directory")
                     .font(.system(size: 13, weight: .regular))
-                    .foregroundStyle(Color(nsColor: .labelColor))
+                    .foregroundStyle(ReconTheme.textPrimary)
 
                 Text(value)
                     .font(.system(size: 11, weight: .regular, design: .monospaced))
-                    .foregroundStyle(Color(nsColor: .secondaryLabelColor))
+                    .foregroundStyle(ReconTheme.textSecondary)
                     .lineLimit(2)
             }
 
             Spacer(minLength: 12)
 
             Button("Reveal", action: action)
-                .buttonStyle(.bordered)
+                .buttonStyle(ReconSecondaryButtonStyle())
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 7)
         .frame(maxWidth: .infinity, minHeight: 52, alignment: .leading)
+    }
+}
+
+private struct ReconSettingsMenuLabel: View {
+    let title: String
+    let width: CGFloat
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Text(title)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(ReconTheme.textPrimary)
+                .lineLimit(1)
+
+            Spacer(minLength: 8)
+
+            Image(systemName: "chevron.up.chevron.down")
+                .font(.system(size: 9, weight: .semibold))
+                .foregroundStyle(ReconTheme.accent)
+        }
+        .padding(.horizontal, 10)
+        .frame(width: width, height: 30)
+        .background(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(ReconTheme.panelRaised)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(ReconTheme.panelBorder, lineWidth: 1)
+        )
     }
 }
 
@@ -550,7 +585,7 @@ private struct PreferencesWindowConfigurator: NSViewRepresentable {
         DispatchQueue.main.async {
             guard let window = view.window else { return }
             window.isOpaque = false
-            window.backgroundColor = NSColor.windowBackgroundColor
+            window.backgroundColor = ReconTheme.windowBackgroundNSColor
             window.level = .floating
             window.collectionBehavior.insert(.fullScreenAuxiliary)
             window.standardWindowButton(.zoomButton)?.isHidden = true
