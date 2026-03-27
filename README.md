@@ -112,8 +112,8 @@ If you are using the included GitHub Actions workflow, this upload happens autom
 - Recon shells out to the installed `telepresence` CLI
 - It resolves `KUBECONFIG` and `PATH` from the user environment so Finder-launched app sessions behave like a normal shell session
 - Switching kubeconfig files triggers a full Telepresence reconnect
-- It polls Telepresence status every 5 minutes and also refreshes when you open the menu
-- Preferences in the menu let users change the polling interval, enable launch at login, and opt into auto-reconnect
+- It polls Telepresence status automatically every 60 seconds by default and also refreshes when you open the menu
+- Preferences let users change the polling interval, switch to manual refresh only, enable launch at login, and opt into auto-reconnect
 - The app is a menu bar utility, not a full Kubernetes dashboard
 
 ## Notes
