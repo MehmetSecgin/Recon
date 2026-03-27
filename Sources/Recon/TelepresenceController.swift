@@ -67,20 +67,25 @@ final class TelepresenceController: ObservableObject {
     @Published private(set) var kubeconfigPickerOptions: [KubeconfigPickerOption] = []
     @Published private(set) var namespacePickerOptions: [NamespacePickerOption] = []
     @Published private(set) var isLoadingNamespacePickerOptions = false
+    @Published private(set) var appUpdateState: AppUpdateState = .idle
 
     let settingsStore: AppSettingsStore
 
     private let environmentResolver: CommandEnvironmentResolver
     private let cli: TelepresenceCLI
+    private let releaseChecker: AppReleaseChecker
+    private let appInstaller: AppInstaller
     private let targetResolver: KubeTargetResolver
     private let namespaceDiscoveryService: NamespaceDiscoveryService
     private let logLocator = TelepresenceLogLocator()
     private let fileManager = FileManager.default
     private var pollingTask: Task<Void, Never>?
+    private var updatePollingTask: Task<Void, Never>?
     private var hasAttemptedAutoReconnectForCurrentDrop = false
     private var userInitiatedDisconnect = false
     private var lastCommandFailure: CommandOutcome?
     private var lastNamespacePickerContext: String?
+    private var lastUpdateCheckAt: Date?
     private var cancellables = Set<AnyCancellable>()
 
     var statusItemTitle: String {
@@ -201,12 +206,80 @@ final class TelepresenceController: ObservableObject {
         return KubeconfigPickerOption(kind: .path(selectedKubeconfigPath), title: "").id
     }
 
+    var appUpdateTitle: String {
+        switch appUpdateState {
+        case .idle:
+            return "Check for Updates"
+        case .checking:
+            return "Checking for updates"
+        case .upToDate:
+            return "Recon is up to date"
+        case .available:
+            return "Update available"
+        case .installing:
+            return "Installing update"
+        case .checkFailed:
+            return "Couldn't check for updates"
+        case .installFailed:
+            return "Update failed"
+        }
+    }
+
+    var appUpdateDetail: String {
+        switch appUpdateState {
+        case .idle:
+            return "Look for the latest published Recon release."
+        case .checking:
+            return "Looking for the latest published Recon release."
+        case .upToDate(let currentVersion, let latestVersion):
+            if let latestVersion, latestVersion != currentVersion {
+                return "Installed: v\(currentVersion). Latest seen: v\(latestVersion)."
+            }
+            return "Installed: v\(currentVersion)."
+        case .available(let release):
+            return "\(release.displayVersion) is ready to install."
+        case .installing(let release):
+            return "Downloading and installing \(release.displayVersion)..."
+        case .checkFailed(let currentVersion):
+            return "Installed: v\(currentVersion). Try again."
+        case .installFailed(let currentVersion, let release):
+            return "Couldn't install \(release.displayVersion). Installed: v\(currentVersion)."
+        }
+    }
+
+    var appUpdateActionTitle: String? {
+        switch appUpdateState {
+        case .checking, .installing:
+            return nil
+        case .available, .installFailed:
+            return "Update"
+        default:
+            return "Check"
+        }
+    }
+
+    var isPerformingUpdateAction: Bool {
+        if case .checking = appUpdateState {
+            return true
+        }
+
+        if case .installing = appUpdateState {
+            return true
+        }
+
+        return false
+    }
+
     init(
         settingsStore: AppSettingsStore,
-        environmentResolver: CommandEnvironmentResolver = CommandEnvironmentResolver()
+        environmentResolver: CommandEnvironmentResolver = CommandEnvironmentResolver(),
+        releaseChecker: AppReleaseChecker = AppReleaseChecker(),
+        appInstaller: AppInstaller = AppInstaller()
     ) {
         self.settingsStore = settingsStore
         self.environmentResolver = environmentResolver
+        self.releaseChecker = releaseChecker
+        self.appInstaller = appInstaller
         cli = TelepresenceCLI(environmentResolver: environmentResolver)
         targetResolver = KubeTargetResolver(environmentResolver: environmentResolver)
         namespaceDiscoveryService = NamespaceDiscoveryService(
@@ -223,13 +296,16 @@ final class TelepresenceController: ObservableObject {
             await self.syncEnvironmentSettings()
             await self.refreshDetectedExecutables()
             await self.loadKubeconfigOptions()
+            await self.checkForUpdates(force: true)
             await self.performAutoConnectOnLaunchIfNeeded()
             self.startPolling()
+            self.startUpdatePolling()
         }
     }
 
     deinit {
         pollingTask?.cancel()
+        updatePollingTask?.cancel()
     }
 
     func connect() {
@@ -330,6 +406,27 @@ final class TelepresenceController: ObservableObject {
     func refreshNow() {
         Task {
             await refreshStatus()
+        }
+    }
+
+    func refreshUpdateStatusIfNeeded() {
+        Task {
+            await checkForUpdates(force: false)
+        }
+    }
+
+    func handleAppUpdateAction() {
+        switch appUpdateState {
+        case .available(let release), .installFailed(_, let release):
+            Task {
+                await installUpdate(release)
+            }
+        case .checking, .installing:
+            return
+        default:
+            Task {
+                await checkForUpdates(force: true)
+            }
         }
     }
 
@@ -568,6 +665,10 @@ final class TelepresenceController: ObservableObject {
         restartPolling()
     }
 
+    private func startUpdatePolling() {
+        restartUpdatePolling()
+    }
+
     private func restartPolling() {
         pollingTask?.cancel()
 
@@ -582,6 +683,18 @@ final class TelepresenceController: ObservableObject {
                 try? await Task.sleep(for: interval)
                 guard !Task.isCancelled else { return }
                 await refreshStatus()
+            }
+        }
+    }
+
+    private func restartUpdatePolling() {
+        updatePollingTask?.cancel()
+
+        updatePollingTask = Task {
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(6 * 60 * 60))
+                guard !Task.isCancelled else { return }
+                await checkForUpdates(force: false)
             }
         }
     }
@@ -726,6 +839,54 @@ final class TelepresenceController: ObservableObject {
         }
 
         await refreshStatus()
+    }
+
+    private func checkForUpdates(force: Bool) async {
+        if isPerformingUpdateAction {
+            return
+        }
+
+        if !force,
+           let lastUpdateCheckAt,
+           Date.now.timeIntervalSince(lastUpdateCheckAt) < 6 * 60 * 60 {
+            return
+        }
+
+        let currentVersion = Self.currentAppVersion()
+        appUpdateState = .checking
+
+        do {
+            let release = try await releaseChecker.fetchLatestRelease()
+            lastUpdateCheckAt = .now
+
+            if AppReleaseChecker.isVersion(release.version, newerThan: currentVersion) {
+                appUpdateState = .available(release)
+            } else {
+                appUpdateState = .upToDate(currentVersion: currentVersion, latestVersion: release.version)
+            }
+        } catch {
+            lastUpdateCheckAt = .now
+            appUpdateState = .checkFailed(currentVersion: currentVersion)
+        }
+    }
+
+    private func installUpdate(_ release: AppRelease) async {
+        guard !isPerformingUpdateAction else {
+            return
+        }
+
+        appUpdateState = .installing(release)
+
+        do {
+            try await appInstaller.installLatestRelease()
+            appInstaller.relaunchInstalledAppAfterCurrentProcessExits()
+            NSApplication.shared.terminate(nil)
+        } catch {
+            appUpdateState = .installFailed(
+                currentVersion: Self.currentAppVersion(),
+                release: release
+            )
+        }
     }
 
     private func scanDefaultKubeconfigDirectory() -> [String] {
@@ -996,5 +1157,21 @@ final class TelepresenceController: ObservableObject {
         }
 
         return NSString(string: path).abbreviatingWithTildeInPath
+    }
+
+    private static func currentAppVersion(bundle: Bundle = .main) -> String {
+        if let shortVersion = (bundle.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+           !shortVersion.isEmpty {
+            return shortVersion
+        }
+
+        if let buildNumber = (bundle.object(forInfoDictionaryKey: "CFBundleVersion") as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+           !buildNumber.isEmpty {
+            return buildNumber
+        }
+
+        return "0.0.0"
     }
 }
