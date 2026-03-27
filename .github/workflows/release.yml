@@ -1,39 +1,88 @@
 name: Release
 
 on:
-  push:
+  pull_request:
     branches:
       - main
-  workflow_dispatch:
+    types:
+      - closed
 
 permissions:
   contents: write
 
 jobs:
   release:
+    if: github.event.pull_request.merged == true
     runs-on: macos-14
 
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: main
+
+      - name: Determine release version
+        id: version
+        run: |
+          major_count="$(jq '[.pull_request.labels[].name | select(. == "release:major")] | length' "$GITHUB_EVENT_PATH")"
+          minor_count="$(jq '[.pull_request.labels[].name | select(. == "release:minor")] | length' "$GITHUB_EVENT_PATH")"
+          release_label_count=$((major_count + minor_count))
+
+          if [[ "$release_label_count" -ne 1 ]]; then
+            echo "Merged PRs must carry exactly one release label: release:major or release:minor." >&2
+            exit 1
+          fi
+
+          if [[ "$major_count" -eq 1 ]]; then
+            bump="major"
+          else
+            bump="minor"
+          fi
+
+          latest_tag="$(
+            git tag --list 'v*' --sort=-version:refname |
+            grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' |
+            head -n 1 ||
+            true
+          )"
+
+          if [[ -z "$latest_tag" ]]; then
+            current_version="0.0.0"
+          else
+            current_version="${latest_tag#v}"
+          fi
+
+          IFS='.' read -r major minor patch <<< "$current_version"
+
+          case "$bump" in
+            major)
+              next_version="$((major + 1)).0.0"
+              ;;
+            minor)
+              next_version="${major}.$((minor + 1)).0"
+              ;;
+          esac
+
+          echo "bump=$bump" >> "$GITHUB_OUTPUT"
+          echo "version=$next_version" >> "$GITHUB_OUTPUT"
+          echo "tag=v$next_version" >> "$GITHUB_OUTPUT"
 
       - name: Make scripts executable
         run: chmod +x build.sh release.sh install.sh
 
       - name: Build release asset
+        env:
+          RECON_VERSION: ${{ steps.version.outputs.version }}
+          RECON_BUILD_NUMBER: ${{ steps.version.outputs.version }}
         run: ./release.sh
-
-      - name: Generate release tag
-        id: tag
-        run: |
-          echo "value=release-$(date -u +'%Y%m%d-%H%M%S')-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
 
       - name: Publish GitHub release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release create "${{ steps.tag.outputs.value }}" \
+          gh release create "${{ steps.version.outputs.tag }}" \
             build/Recon.app.zip \
-            --target "$GITHUB_SHA" \
-            --title "Recon ${{ steps.tag.outputs.value }}" \
-            --notes "Automated release for commit $GITHUB_SHA"
+            --target "${{ github.event.pull_request.merge_commit_sha }}" \
+            --title "Recon ${{ steps.version.outputs.tag }}" \
+            --notes "Released from PR #${{ github.event.pull_request.number }}: ${{ github.event.pull_request.title }}"
