@@ -80,14 +80,14 @@ This repo includes a GitHub Actions workflow that automatically:
 
 - builds `Recon.app`
 - zips it as `Recon.app.zip`
-- creates a new GitHub Release when a pull request into `main` is merged
-- validates the same release build path on pull requests before merge
+- creates a new GitHub Release when a pull request into `main` is merged and it changes shippable app files
+- validates the same release build path on pull requests before merge when they change shippable app files
 
 Direct pushes to `main` should be blocked at the repository level, and every change should land through a pull request.
 
-When a pull request into `main` merges, the release workflow cuts a new minor release automatically. If you want the merge to cut a major release instead, add the `release:major` label before merging.
+When a pull request into `main` merges, the release workflow cuts a new minor release automatically only if the pull request changes shippable app files: `Sources/`, `Info.plist`, `build.sh`, or the asset catalog in `Resources/Assets.xcassets/`. If you want the merge to cut a major release instead, add the `release:major` label before merging.
 
-That means the normal path is automatic minor releases on every merged PR, with an explicit label only when you want a major bump.
+That means the normal path is automatic minor releases for app changes, with an explicit label only when you want a major bump. Docs-only and repo-maintenance PRs do not cut new app versions.
 
 That keeps the installer pointed at the newest published release without timestamp tags or manual packaging steps.
 
