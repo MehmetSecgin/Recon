@@ -22,8 +22,25 @@ jobs:
           fetch-depth: 0
           ref: main
 
+      - name: Determine release scope
+        id: scope
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          COMPARE_SHA: ${{ github.event.pull_request.merge_commit_sha }}
+        run: |
+          changed_files="$(git diff --name-only "$BASE_SHA" "$COMPARE_SHA")"
+
+          printf 'Changed files:\n%s\n' "$changed_files"
+
+          if printf '%s\n' "$changed_files" | grep -Eq '^(Sources/|Info\.plist$|build\.sh$|Resources/Assets\.xcassets/)'; then
+            echo "should_release=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "should_release=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Determine release version
         id: version
+        if: steps.scope.outputs.should_release == 'true'
         run: |
           major_count="$(jq '[.pull_request.labels[].name | select(. == "release:major")] | length' "$GITHUB_EVENT_PATH")"
 
@@ -62,15 +79,22 @@ jobs:
           echo "tag=v$next_version" >> "$GITHUB_OUTPUT"
 
       - name: Make scripts executable
+        if: steps.scope.outputs.should_release == 'true'
         run: chmod +x build.sh release.sh install.sh
 
       - name: Build release asset
+        if: steps.scope.outputs.should_release == 'true'
         env:
           RECON_VERSION: ${{ steps.version.outputs.version }}
           RECON_BUILD_NUMBER: ${{ steps.version.outputs.version }}
         run: ./release.sh
 
+      - name: Skip non-release changes
+        if: steps.scope.outputs.should_release != 'true'
+        run: echo "No shippable app files changed; skipping release."
+
       - name: Publish GitHub release
+        if: steps.scope.outputs.should_release == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
