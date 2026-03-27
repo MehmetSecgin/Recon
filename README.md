@@ -54,6 +54,12 @@ Requirements:
 - Telepresence installed locally
 - `kubectl` available in your normal shell environment
 
+If you just installed or updated Xcode and `./build.sh` reports an `actool` startup/plugin error, run:
+
+```bash
+xcodebuild -runFirstLaunch
+```
+
 Recon uses the included `build.sh` script for builds. There is no `Package.swift` or Xcode project to open.
 
 Build:
