@@ -13,6 +13,7 @@ struct TargetMetadata: Equatable {
     let kubeconfigMode: KubeconfigMode
     let context: String?
     let namespace: String?
+    let kubeconfigDefaultNamespace: String?
     let isLastKnown: Bool
     let resolutionError: String?
 
@@ -21,6 +22,7 @@ struct TargetMetadata: Equatable {
         kubeconfigMode: .unresolved,
         context: nil,
         namespace: nil,
+        kubeconfigDefaultNamespace: nil,
         isLastKnown: true,
         resolutionError: nil
     )
@@ -32,6 +34,7 @@ struct TargetMetadata: Equatable {
     func applying(
         context: String?,
         namespace: String?,
+        kubeconfigDefaultNamespace: String?,
         isLastKnown: Bool,
         resolutionError: String?
     ) -> TargetMetadata {
@@ -40,6 +43,7 @@ struct TargetMetadata: Equatable {
             kubeconfigMode: kubeconfigMode,
             context: context,
             namespace: namespace,
+            kubeconfigDefaultNamespace: kubeconfigDefaultNamespace,
             isLastKnown: isLastKnown,
             resolutionError: resolutionError
         )

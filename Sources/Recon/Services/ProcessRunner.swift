@@ -14,10 +14,19 @@ struct ProcessOutput {
 }
 
 enum ProcessRunner {
+    struct TimeoutError: LocalizedError {
+        let duration: Duration
+
+        var errorDescription: String? {
+            "Command timed out after \(duration.components.seconds) seconds."
+        }
+    }
+
     static func run(
         executable: String,
         arguments: [String],
-        environment: [String: String]? = nil
+        environment: [String: String]? = nil,
+        timeout: Duration? = nil
     ) async throws -> ProcessOutput {
         let process = Process()
         let stdoutPipe = Pipe()
@@ -36,10 +45,36 @@ enum ProcessRunner {
 
         try process.run()
 
-        let terminationStatus = await withCheckedContinuation { continuation in
-            DispatchQueue.global(qos: .utility).async {
-                process.waitUntilExit()
-                continuation.resume(returning: process.terminationStatus)
+        let terminationStatus: Int32
+        if let timeout {
+            terminationStatus = try await withThrowingTaskGroup(of: Int32.self) { group in
+                group.addTask {
+                    await withCheckedContinuation { continuation in
+                        DispatchQueue.global(qos: .utility).async {
+                            process.waitUntilExit()
+                            continuation.resume(returning: process.terminationStatus)
+                        }
+                    }
+                }
+
+                group.addTask {
+                    try await Task.sleep(for: timeout)
+                    if process.isRunning {
+                        process.terminate()
+                    }
+                    throw TimeoutError(duration: timeout)
+                }
+
+                let status = try await group.next() ?? process.terminationStatus
+                group.cancelAll()
+                return status
+            }
+        } else {
+            terminationStatus = await withCheckedContinuation { continuation in
+                DispatchQueue.global(qos: .utility).async {
+                    process.waitUntilExit()
+                    continuation.resume(returning: process.terminationStatus)
+                }
             }
         }
 

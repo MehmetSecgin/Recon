@@ -5,9 +5,47 @@ import UserNotifications
 
 struct KubeconfigOption: Identifiable, Hashable {
     let path: String
+    let title: String
 
     var id: String { path }
-    var displayName: String { URL(fileURLWithPath: path).lastPathComponent }
+}
+
+struct KubeconfigPickerOption: Identifiable, Hashable {
+    enum Kind: Hashable {
+        case path(String)
+        case chooseFile
+    }
+
+    let kind: Kind
+    let title: String
+
+    var id: String {
+        switch kind {
+        case .path(let path):
+            return "kubeconfig:\(path)"
+        case .chooseFile:
+            return "kubeconfig:choose-file"
+        }
+    }
+}
+
+struct NamespacePickerOption: Identifiable, Hashable {
+    enum Kind: Hashable {
+        case namespace(String)
+        case useKubeconfigDefault
+    }
+
+    let kind: Kind
+    let title: String
+
+    var id: String {
+        switch kind {
+        case .namespace(let namespace):
+            return "namespace:\(namespace)"
+        case .useKubeconfigDefault:
+            return "use-kubeconfig-default"
+        }
+    }
 }
 
 @MainActor
@@ -25,18 +63,24 @@ final class TelepresenceController: ObservableObject {
     @Published private(set) var isDetectingKubectlPath = false
     @Published private(set) var detectedTelepresencePath: String?
     @Published private(set) var detectedKubectlPath: String?
+    @Published private(set) var namespaceOverride: String?
+    @Published private(set) var kubeconfigPickerOptions: [KubeconfigPickerOption] = []
+    @Published private(set) var namespacePickerOptions: [NamespacePickerOption] = []
+    @Published private(set) var isLoadingNamespacePickerOptions = false
 
     let settingsStore: AppSettingsStore
 
     private let environmentResolver: CommandEnvironmentResolver
     private let cli: TelepresenceCLI
     private let targetResolver: KubeTargetResolver
+    private let namespaceDiscoveryService: NamespaceDiscoveryService
     private let logLocator = TelepresenceLogLocator()
     private let fileManager = FileManager.default
     private var pollingTask: Task<Void, Never>?
     private var hasAttemptedAutoReconnectForCurrentDrop = false
     private var userInitiatedDisconnect = false
     private var lastCommandFailure: CommandOutcome?
+    private var lastNamespacePickerContext: String?
     private var cancellables = Set<AnyCancellable>()
 
     var statusItemTitle: String {
@@ -122,12 +166,39 @@ final class TelepresenceController: ObservableObject {
         targetMetadata.kubeconfigDisplay
     }
 
+    var isKubeconfigRowInteractive: Bool {
+        isSwitchingKubeconfig == false && kubeconfigPickerOptions.isEmpty == false
+    }
+
     var displayContext: String {
         targetMetadata.context ?? "\u{2014}"
     }
 
     var displayNamespace: String {
         targetMetadata.namespace ?? "\u{2014}"
+    }
+
+    var selectedNamespacePickerOptionID: String? {
+        if namespaceOverride != nil {
+            guard let namespace = targetMetadata.namespace else {
+                return nil
+            }
+            return NamespacePickerOption(kind: .namespace(namespace), title: namespace).id
+        }
+
+        guard let namespace = targetMetadata.kubeconfigDefaultNamespace ?? targetMetadata.namespace else {
+            return nil
+        }
+
+        return NamespacePickerOption(kind: .namespace(namespace), title: namespace).id
+    }
+
+    var selectedKubeconfigPickerOptionID: String? {
+        guard let selectedKubeconfigPath else {
+            return nil
+        }
+
+        return KubeconfigPickerOption(kind: .path(selectedKubeconfigPath), title: "").id
     }
 
     init(
@@ -138,6 +209,11 @@ final class TelepresenceController: ObservableObject {
         self.environmentResolver = environmentResolver
         cli = TelepresenceCLI(environmentResolver: environmentResolver)
         targetResolver = KubeTargetResolver(environmentResolver: environmentResolver)
+        namespaceDiscoveryService = NamespaceDiscoveryService(
+            environmentResolver: environmentResolver,
+            targetResolver: targetResolver,
+            settingsStore: settingsStore
+        )
 
         bindSettings()
 
@@ -158,22 +234,96 @@ final class TelepresenceController: ObservableObject {
 
     func connect() {
         userInitiatedDisconnect = false
+        let namespace = activeNamespaceOverride
         runCommand(busyMessage: "Connecting to Telepresence...") { cli in
-            await cli.connect()
+            await cli.connect(namespace: namespace)
         }
     }
 
     func reconnect() {
         userInitiatedDisconnect = false
+        let namespace = activeNamespaceOverride
         runCommand(busyMessage: "Restarting Telepresence...") { cli in
-            await cli.reconnect()
+            await cli.reconnect(namespace: namespace)
         }
     }
 
     func disconnect() {
         userInitiatedDisconnect = true
+        Task {
+            await namespaceDiscoveryService.clearSessionCache()
+        }
         runCommand(busyMessage: "Disconnecting Telepresence...") { cli in
             await cli.disconnect()
+        }
+    }
+
+    func switchNamespace(to namespace: String) {
+        guard let context = targetMetadata.context else { return }
+
+        settingsStore.setOverride(namespace, for: context)
+        namespaceOverride = settingsStore.override(for: context)
+        targetMetadata = targetMetadata.applying(
+            context: targetMetadata.context,
+            namespace: namespaceOverride ?? targetMetadata.kubeconfigDefaultNamespace,
+            kubeconfigDefaultNamespace: targetMetadata.kubeconfigDefaultNamespace,
+            isLastKnown: true,
+            resolutionError: nil
+        )
+        userInitiatedDisconnect = false
+
+        runCommand(busyMessage: "Reconnecting to \(namespace)...") { cli in
+            await self.namespaceDiscoveryService.clearSessionCache()
+            return await cli.reconnect(namespace: namespace)
+        }
+    }
+
+    func clearNamespaceOverride() {
+        guard let context = targetMetadata.context else { return }
+
+        settingsStore.clearOverride(for: context)
+        namespaceOverride = nil
+        targetMetadata = targetMetadata.applying(
+            context: targetMetadata.context,
+            namespace: targetMetadata.kubeconfigDefaultNamespace,
+            kubeconfigDefaultNamespace: targetMetadata.kubeconfigDefaultNamespace,
+            isLastKnown: true,
+            resolutionError: nil
+        )
+        userInitiatedDisconnect = false
+
+        runCommand(busyMessage: "Reconnecting with kubeconfig default namespace...") { cli in
+            await self.namespaceDiscoveryService.clearSessionCache()
+            return await cli.reconnect(namespace: nil)
+        }
+    }
+
+    func selectNamespacePickerOption(withID optionID: String) {
+        guard let option = namespacePickerOptions.first(where: { $0.id == optionID }) else {
+            return
+        }
+
+        switch option.kind {
+        case .namespace(let namespace):
+            guard namespace != targetMetadata.namespace else { return }
+            switchNamespace(to: namespace)
+        case .useKubeconfigDefault:
+            guard namespaceOverride != nil else { return }
+            clearNamespaceOverride()
+        }
+    }
+
+    func selectKubeconfigPickerOption(withID optionID: String) {
+        guard let option = kubeconfigPickerOptions.first(where: { $0.id == optionID }) else {
+            return
+        }
+
+        switch option.kind {
+        case .path(let path):
+            guard path != selectedKubeconfigPath else { return }
+            addAndSelectKubeconfig(path: path)
+        case .chooseFile:
+            break
         }
     }
 
@@ -236,6 +386,7 @@ final class TelepresenceController: ObservableObject {
             kubeconfigMode: .pinned,
             context: targetMetadata.context,
             namespace: targetMetadata.namespace,
+            kubeconfigDefaultNamespace: targetMetadata.kubeconfigDefaultNamespace,
             isLastKnown: true,
             resolutionError: nil
         )
@@ -245,10 +396,11 @@ final class TelepresenceController: ObservableObject {
             busyMessage: "Switching kubeconfig and reconnecting...",
             switchingKubeconfig: true
         ) { cli in
+            await self.namespaceDiscoveryService.clearSessionCache()
             await self.syncEnvironmentSettings()
             await self.loadKubeconfigOptions()
             await self.refreshTargetMetadata()
-            return await cli.reconnect()
+            return await cli.reconnect(namespace: self.activeNamespaceOverride)
         }
     }
 
@@ -263,6 +415,7 @@ final class TelepresenceController: ObservableObject {
             busyMessage: "Reconnecting after kubeconfig mode change...",
             switchingKubeconfig: true
         ) { cli in
+            await self.namespaceDiscoveryService.clearSessionCache()
             switch mode {
             case .pinned:
                 self.settingsStore.setKubeconfigPreferenceMode(.pinned)
@@ -273,7 +426,7 @@ final class TelepresenceController: ObservableObject {
             await self.syncEnvironmentSettings()
             await self.loadKubeconfigOptions()
             await self.refreshTargetMetadata()
-            return await cli.reconnect()
+            return await cli.reconnect(namespace: self.activeNamespaceOverride)
         }
     }
 
@@ -401,6 +554,7 @@ final class TelepresenceController: ObservableObject {
 
         mergeKubeconfigOptions(with: discoveredPaths + rememberedPaths + resolvedPaths)
         settingsStore.setRememberedKubeconfigPaths(kubeconfigOptions.map(\.path))
+        rebuildKubeconfigPickerOptions()
 
         if settingsStore.kubeconfigPreferenceMode == .pinned,
            let selectedKubeconfigPath = settingsStore.selectedKubeconfigPath,
@@ -481,6 +635,13 @@ final class TelepresenceController: ObservableObject {
             hasAttemptedAutoReconnectForCurrentDrop = false
             userInitiatedDisconnect = false
             lastCommandFailure = nil
+            recordRecentNamespaceIfNeeded()
+            Task { @MainActor [weak self] in
+                await self?.refreshNamespacePickerOptions(force: previousState != .connected)
+            }
+        } else if updatedSnapshot.state == .disconnected {
+            await namespaceDiscoveryService.clearSessionCache()
+            clearNamespacePickerOptions()
         }
 
         if previousState == .connected && updatedSnapshot.state == .disconnected {
@@ -503,20 +664,30 @@ final class TelepresenceController: ObservableObject {
 
         hasAttemptedAutoReconnectForCurrentDrop = true
         runCommand(busyMessage: "Connection dropped. Reconnecting...", isAutoReconnect: true) { cli in
-            await cli.reconnect()
+            await self.namespaceDiscoveryService.clearSessionCache()
+            return await cli.reconnect(namespace: self.activeNamespaceOverride)
         }
     }
 
     private func refreshTargetMetadata() async {
+        let previousContext = targetMetadata.context
         let resolvedMetadata = await targetResolver.resolveTargetMetadata()
         let shouldDimMetadata = snapshot.state != .connected || resolvedMetadata.resolutionError != nil
+        let resolvedContext = resolvedMetadata.context ?? targetMetadata.context
+        let resolvedOverride = resolvedContext.flatMap { settingsStore.override(for: $0) }
+        let resolvedDefaultNamespace = resolvedMetadata.kubeconfigDefaultNamespace ?? targetMetadata.kubeconfigDefaultNamespace
+        let effectiveNamespace = resolvedOverride ?? resolvedDefaultNamespace ?? targetMetadata.namespace
 
-        let mergedContext = resolvedMetadata.context ?? targetMetadata.context
-        let mergedNamespace = resolvedMetadata.namespace ?? targetMetadata.namespace
+        namespaceOverride = resolvedOverride
+        if previousContext != resolvedContext {
+            await namespaceDiscoveryService.clearSessionCache()
+            clearNamespacePickerOptions()
+        }
 
         targetMetadata = resolvedMetadata.applying(
-            context: mergedContext,
-            namespace: mergedNamespace,
+            context: resolvedContext,
+            namespace: effectiveNamespace,
+            kubeconfigDefaultNamespace: resolvedDefaultNamespace,
             isLastKnown: shouldDimMetadata,
             resolutionError: resolvedMetadata.resolutionError
         )
@@ -537,7 +708,7 @@ final class TelepresenceController: ObservableObject {
         snapshot = .busy("Auto-connecting on launch...")
         errorPresentation = nil
 
-        let outcome = await cli.connect()
+        let outcome = await cli.connect(namespace: activeNamespaceOverride)
         if outcome.success {
             await postNotification(
                 event: .connectionEstablished,
@@ -614,7 +785,20 @@ final class TelepresenceController: ObservableObject {
                 ) == .orderedAscending
             }
 
-        kubeconfigOptions = mergedPaths.map(KubeconfigOption.init(path:))
+        let duplicateBasenames = Dictionary(grouping: mergedPaths, by: {
+            URL(fileURLWithPath: $0).lastPathComponent
+        })
+        .filter { $0.value.count > 1 }
+
+        kubeconfigOptions = mergedPaths.map { path in
+            KubeconfigOption(
+                path: path,
+                title: formatKubeconfigOptionTitle(
+                    path: path,
+                    hasDuplicateBasename: duplicateBasenames[URL(fileURLWithPath: path).lastPathComponent] != nil
+                )
+            )
+        }
     }
 
     private func existingOptionPath(matching path: String) -> String? {
@@ -691,6 +875,119 @@ final class TelepresenceController: ObservableObject {
         }
 
         errorPresentation = nil
+    }
+
+    private var activeNamespaceOverride: String? {
+        guard let context = targetMetadata.context else {
+            return nil
+        }
+
+        return settingsStore.override(for: context)
+    }
+
+    private func recordRecentNamespaceIfNeeded() {
+        guard let context = targetMetadata.context,
+              let namespace = targetMetadata.namespace else {
+            return
+        }
+
+        settingsStore.recordRecentNamespace(namespace, for: context)
+    }
+
+    private func rebuildKubeconfigPickerOptions() {
+        kubeconfigPickerOptions = kubeconfigOptions.map {
+            KubeconfigPickerOption(kind: .path($0.path), title: $0.title)
+        } + [
+            KubeconfigPickerOption(kind: .chooseFile, title: "Choose file…")
+        ]
+    }
+
+    private func formatKubeconfigOptionTitle(path: String, hasDuplicateBasename: Bool) -> String {
+        let fileURL = URL(fileURLWithPath: path)
+        let basename = fileURL.lastPathComponent
+        guard hasDuplicateBasename else {
+            return basename
+        }
+
+        let parentPath = NSString(string: fileURL.deletingLastPathComponent().path).abbreviatingWithTildeInPath
+        return "\(basename) (\(parentPath))"
+    }
+
+    private func refreshNamespacePickerOptions(force: Bool = false) async {
+        guard snapshot.state == .connected,
+              let context = targetMetadata.context else {
+            clearNamespacePickerOptions()
+            return
+        }
+
+        guard force || lastNamespacePickerContext != context || namespacePickerOptions.isEmpty else {
+            return
+        }
+
+        guard isLoadingNamespacePickerOptions == false else {
+            return
+        }
+
+        isLoadingNamespacePickerOptions = true
+        defer { isLoadingNamespacePickerOptions = false }
+
+        let result = await namespaceDiscoveryService.fetchAvailable(for: context)
+        namespacePickerOptions = makeNamespacePickerOptions(from: result)
+        lastNamespacePickerContext = context
+    }
+
+    private func makeNamespacePickerOptions(from result: NamespaceListResult) -> [NamespacePickerOption] {
+        let currentNamespace = targetMetadata.namespace
+        let orderedNamespaces = result.available + result.recentlyUsed + [result.kubeconfigDefault] + [currentNamespace].compactMap { $0 }
+
+        var options: [NamespacePickerOption] = []
+        var seen = Set<String>()
+
+        if result.currentOverride != nil {
+            options.append(
+                NamespacePickerOption(
+                    kind: .useKubeconfigDefault,
+                    title: formatNamespaceOptionTitle(result.kubeconfigDefault, suffix: "kubeconfig default")
+                )
+            )
+        }
+
+        for namespace in orderedNamespaces {
+            let trimmedNamespace = namespace.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard trimmedNamespace.isEmpty == false,
+                  seen.insert(trimmedNamespace).inserted else {
+                continue
+            }
+
+            let suffix = result.currentOverride != nil && trimmedNamespace == result.kubeconfigDefault
+                ? "kubeconfig default"
+                : nil
+            options.append(
+                NamespacePickerOption(
+                    kind: .namespace(trimmedNamespace),
+                    title: formatNamespaceOptionTitle(trimmedNamespace, suffix: suffix)
+                )
+            )
+        }
+
+        return options
+    }
+
+    private func formatNamespaceOptionTitle(_ namespace: String, suffix: String?) -> String {
+        var components = [namespace]
+        if let suffix, suffix.isEmpty == false {
+            components.append("(\(suffix))")
+        }
+        if ProductionDetector.isProductionNamespace(namespace) {
+            components.append("[PROD]")
+        }
+        return components.joined(separator: " ")
+    }
+
+    private func clearNamespacePickerOptions() {
+        namespacePickerOptions = []
+        isLoadingNamespacePickerOptions = false
+        lastNamespacePickerContext = nil
     }
 
     private func displayPathText(for path: String?) -> String {

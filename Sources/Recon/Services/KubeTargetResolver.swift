@@ -37,6 +37,7 @@ actor KubeTargetResolver {
                 kubeconfigMode: source.mode,
                 context: nil,
                 namespace: nil,
+                kubeconfigDefaultNamespace: nil,
                 isLastKnown: false,
                 resolutionError: "kubectl was not found."
             )
@@ -97,6 +98,7 @@ actor KubeTargetResolver {
             kubeconfigMode: source.mode,
             context: context,
             namespace: namespace,
+            kubeconfigDefaultNamespace: namespace,
             isLastKnown: false,
             resolutionError: resolutionError
         )

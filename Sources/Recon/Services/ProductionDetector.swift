@@ -4,12 +4,20 @@ enum ProductionDetector {
     private static let defaultsKey = "Recon.ProductionContextPatterns"
 
     static func isProduction(context: String?) -> Bool {
-        guard let context = context?.trimmingCharacters(in: .whitespacesAndNewlines), !context.isEmpty else {
+        isProductionLabel(context)
+    }
+
+    static func isProductionNamespace(_ namespace: String?) -> Bool {
+        isProductionLabel(namespace)
+    }
+
+    private static func isProductionLabel(_ value: String?) -> Bool {
+        guard let value = value?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty else {
             return false
         }
 
-        let normalizedContext = context.lowercased()
-        if normalizedContext.contains("prod") {
+        let normalizedValue = value.lowercased()
+        if normalizedValue.contains("prod") {
             return true
         }
 
@@ -18,7 +26,7 @@ enum ProductionDetector {
         return customPatterns
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
             .contains { pattern in
-                !pattern.isEmpty && normalizedContext.contains(pattern)
+                !pattern.isEmpty && normalizedValue.contains(pattern)
             }
     }
 }
