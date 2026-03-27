@@ -278,8 +278,16 @@ struct ReconMenuView: View {
                 Text("Recon \(appVersionText)")
                     .font(.system(size: 10, weight: .regular, design: .monospaced))
                     .foregroundStyle(.tertiary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
 
                 Spacer(minLength: 8)
+
+                FooterSecondaryButton("Diagnostics") {
+                    Task { @MainActor in
+                        DiagnosticsWindowPresenter.present(using: openWindow)
+                    }
+                }
 
                 FooterQuitButton {
                     NSApplication.shared.terminate(nil)
@@ -537,6 +545,22 @@ private struct FooterQuitButton: View {
         Button("Quit", action: action)
             .buttonStyle(MenuActionButtonStyle(variant: .danger))
             .frame(width: 88)
+    }
+}
+
+private struct FooterSecondaryButton: View {
+    let title: String
+    let action: () -> Void
+
+    init(_ title: String, action: @escaping () -> Void) {
+        self.title = title
+        self.action = action
+    }
+
+    var body: some View {
+        Button(title, action: action)
+            .buttonStyle(MenuActionButtonStyle(variant: .secondary))
+            .frame(width: 100)
     }
 }
 

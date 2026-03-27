@@ -7,6 +7,13 @@ struct CommandOutcome {
     let logPaths: [String]
 }
 
+struct DiagnosticExportOutcome {
+    let success: Bool
+    let summary: String
+    let details: String?
+    let bundleURL: URL?
+}
+
 struct TelepresenceStatusSnapshot {
     enum State: String {
         case connected
@@ -32,21 +39,6 @@ struct TelepresenceStatusSnapshot {
 }
 
 actor TelepresenceCLI {
-    private struct StatusResponse: Decodable {
-        let root_daemon: DaemonStatus?
-        let user_daemon: UserDaemonStatus?
-    }
-
-    private struct DaemonStatus: Decodable {
-        let running: Bool?
-        let version: String?
-    }
-
-    private struct UserDaemonStatus: Decodable {
-        let running: Bool?
-        let status: String?
-    }
-
     private let environmentResolver: CommandEnvironmentResolver
 
     init(environmentResolver: CommandEnvironmentResolver = CommandEnvironmentResolver()) {
@@ -79,8 +71,8 @@ actor TelepresenceCLI {
                 return makeDisconnectedSnapshot(output: result.combinedOutput)
             }
 
-            let response = try JSONDecoder().decode(StatusResponse.self, from: Data(stdout.utf8))
-            let stateText = response.user_daemon?.status ?? "Disconnected"
+            let response = try JSONDecoder().decode(TelepresenceDiagnosticsStatus.self, from: Data(stdout.utf8))
+            let stateText = response.userDaemon?.status ?? "Disconnected"
             let normalizedStatus = stateText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
             let isConnected = normalizedStatus == "connected" || normalizedStatus.hasPrefix("connected ")
             let state: TelepresenceStatusSnapshot.State = isConnected ? .connected : .disconnected
@@ -88,7 +80,7 @@ actor TelepresenceCLI {
 
             if state == .connected {
                 detailText = "Connected"
-            } else if response.user_daemon?.running == true || response.root_daemon?.running == true {
+            } else if response.userDaemon?.running == true || response.rootDaemon?.running == true {
                 detailText = "Daemons are running, but there is no active cluster connection."
             } else {
                 detailText = "Telepresence is not connected."
@@ -106,6 +98,91 @@ actor TelepresenceCLI {
                 statusText: "Status check failed",
                 detailText: error.localizedDescription,
                 lastUpdated: .now
+            )
+        }
+    }
+
+    func fetchDiagnosticsStatus() async throws -> TelepresenceDiagnosticsFetchResult {
+        guard let executable = await resolveExecutable() else {
+            return TelepresenceDiagnosticsFetchResult(
+                status: nil,
+                telepresenceUnavailable: true,
+                unavailableReason: "Install Telepresence or set TELEPRESENCE_PATH."
+            )
+        }
+
+        let result = try await ProcessRunner.run(
+            executable: executable,
+            arguments: ["status", "--output", "json"],
+            environment: await environmentResolver.executionEnvironment()
+        )
+
+        guard result.exitCode == 0 else {
+            throw NSError(
+                domain: "Recon.TelepresenceCLI",
+                code: Int(result.exitCode),
+                userInfo: [NSLocalizedDescriptionKey: summarizeFailureOutput(result.combinedOutput)]
+            )
+        }
+
+        let stdout = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !stdout.isEmpty else {
+            return TelepresenceDiagnosticsFetchResult(
+                status: nil,
+                telepresenceUnavailable: false,
+                unavailableReason: nil
+            )
+        }
+
+        let status = try JSONDecoder().decode(TelepresenceDiagnosticsStatus.self, from: Data(stdout.utf8))
+        return TelepresenceDiagnosticsFetchResult(
+            status: status,
+            telepresenceUnavailable: false,
+            unavailableReason: nil
+        )
+    }
+
+    func exportDiagnosticBundle() async -> DiagnosticExportOutcome {
+        guard let executable = await resolveExecutable() else {
+            return DiagnosticExportOutcome(
+                success: false,
+                summary: "Telepresence executable was not found.",
+                details: "Install Telepresence or set TELEPRESENCE_PATH.",
+                bundleURL: nil
+            )
+        }
+
+        let outputURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("telepresence-logs-\(UUID().uuidString).zip")
+
+        do {
+            let result = try await ProcessRunner.run(
+                executable: executable,
+                arguments: ["gather-logs", "--output-file", outputURL.path],
+                environment: await environmentResolver.executionEnvironment()
+            )
+
+            guard result.exitCode == 0 else {
+                return DiagnosticExportOutcome(
+                    success: false,
+                    summary: "Couldn't export Telepresence diagnostics.",
+                    details: summarizeFailureOutput(result.combinedOutput),
+                    bundleURL: nil
+                )
+            }
+
+            return DiagnosticExportOutcome(
+                success: true,
+                summary: "Diagnostic bundle exported.",
+                details: result.combinedOutput.nilIfEmpty,
+                bundleURL: outputURL
+            )
+        } catch {
+            return DiagnosticExportOutcome(
+                success: false,
+                summary: "Couldn't export Telepresence diagnostics.",
+                details: error.localizedDescription,
+                bundleURL: nil
             )
         }
     }
