@@ -24,7 +24,7 @@ struct ReconApp: App {
             PreferencesCommands()
         }
 
-        Window("Recon — Preferences", id: "preferences") {
+        Window("Recon — Preferences", id: AppWindowID.preferences) {
             PreferencesWindowView(controller: controller, settingsStore: settingsStore)
         }
         .defaultSize(width: 500, height: 400)
@@ -38,7 +38,7 @@ private struct PreferencesCommands: Commands {
     var body: some Commands {
         CommandGroup(replacing: .appSettings) {
             Button("Preferences…") {
-                openWindow(id: "preferences")
+                PreferencesWindowPresenter.present(using: openWindow)
             }
             .keyboardShortcut(",", modifiers: [.command])
         }
