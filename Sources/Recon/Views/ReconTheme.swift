@@ -3,7 +3,9 @@ import SwiftUI
 
 enum ReconTheme {
     static let windowBackground = Color(hex: 0x2D2A2A)
+    static let titlebarBackground = Color(hex: 0x262323)
     static let panelBackground = Color(hex: 0x211F1F)
+    static let floatingPanelBackground = Color(hex: 0x171515)
     static let panelRaised = Color(hex: 0x3A3636)
     static let panelBorder = Color(hex: 0x4C4747)
     static let divider = Color(hex: 0x474343)
@@ -12,6 +14,9 @@ enum ReconTheme {
     static let textMuted = Color(hex: 0x7E7878)
     static let accent = Color(hex: 0xE04CD6)
     static let accentPressed = Color(hex: 0xC33AB9)
+    static let accentSoft = Color(hex: 0x5A2A56)
+    static let selectionBackground = Color(hex: 0x4F294B)
+    static let selectionBorder = Color(hex: 0xE04CD6)
     static let danger = Color(hex: 0xFF5B57)
     static let dangerBackground = Color(hex: 0x573533)
     static let success = Color(hex: 0x48DF70)
@@ -80,14 +85,5 @@ struct ReconToggleStyle: ToggleStyle {
                 )
         }
         .buttonStyle(.plain)
-    }
-}
-
-struct ReconMenuTriggerStyle: MenuStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        Menu(configuration)
-            .menuStyle(.borderlessButton)
-            .menuIndicator(.hidden)
-            .buttonStyle(.plain)
     }
 }
