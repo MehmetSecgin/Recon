@@ -250,7 +250,9 @@ struct ReconMenuView: View {
 
     private var preferencesSection: some View {
         PreferencesMenuItem {
-            PreferencesWindowPresenter.present(using: openWindow)
+            Task { @MainActor in
+                PreferencesWindowPresenter.present(using: openWindow)
+            }
         }
     }
 

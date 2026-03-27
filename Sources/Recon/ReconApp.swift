@@ -38,7 +38,9 @@ private struct PreferencesCommands: Commands {
     var body: some Commands {
         CommandGroup(replacing: .appSettings) {
             Button("Preferences…") {
-                PreferencesWindowPresenter.present(using: openWindow)
+                Task { @MainActor in
+                    PreferencesWindowPresenter.present(using: openWindow)
+                }
             }
             .keyboardShortcut(",", modifiers: [.command])
         }

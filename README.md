@@ -81,6 +81,7 @@ This repo includes a GitHub Actions workflow that automatically:
 - builds `Recon.app`
 - zips it as `Recon.app.zip`
 - creates a new GitHub Release when a pull request into `main` is merged
+- validates the same release build path on pull requests before merge
 
 Direct pushes to `main` should be blocked at the repository level, and every change should land through a pull request.
 
