@@ -1,7 +1,6 @@
 import AppKit
 import Combine
 import Foundation
-import ServiceManagement
 import UserNotifications
 
 struct KubeconfigOption: Identifiable, Hashable {
@@ -13,68 +12,32 @@ struct KubeconfigOption: Identifiable, Hashable {
 
 @MainActor
 final class TelepresenceController: ObservableObject {
-    private enum DefaultsKey {
-        static let selectedKubeconfigPath = "Recon.SelectedKubeconfigPath"
-        static let rememberedKubeconfigPaths = "Recon.RememberedKubeconfigPaths"
-        static let hasExplicitKubeconfigSelection = "Recon.HasExplicitKubeconfigSelection"
-        static let pollingIntervalSeconds = "Recon.PollingIntervalSeconds"
-        static let autoReconnectEnabled = "Recon.AutoReconnectEnabled"
-        static let notificationsEnabled = "Recon.NotificationsEnabled"
-        static let autoConnectOnLaunchEnabled = "Recon.AutoConnectOnLaunchEnabled"
-    }
-
-    enum PollingIntervalOption: Int, CaseIterable, Identifiable {
-        case oneMinute = 60
-        case fiveMinutes = 300
-        case fifteenMinutes = 900
-        case thirtyMinutes = 1800
-
-        var id: Int { rawValue }
-
-        var title: String {
-            switch self {
-            case .oneMinute:
-                return "1 minute"
-            case .fiveMinutes:
-                return "5 minutes"
-            case .fifteenMinutes:
-                return "15 minutes"
-            case .thirtyMinutes:
-                return "30 minutes"
-            }
-        }
-
-        var duration: Duration {
-            .seconds(rawValue)
-        }
-    }
-
     @Published private(set) var snapshot = TelepresenceStatusSnapshot.busy("Checking Recon...")
     @Published private(set) var targetMetadata = TargetMetadata.empty
     @Published private(set) var isRunningCommand = false
     @Published private(set) var isSwitchingKubeconfig = false
     @Published private(set) var kubeconfigOptions: [KubeconfigOption] = []
-    @Published private(set) var selectedPollingInterval: PollingIntervalOption
-    @Published private(set) var autoReconnectEnabled: Bool
-    @Published private(set) var notificationsEnabled: Bool
-    @Published private(set) var autoConnectOnLaunchEnabled: Bool
-    @Published private(set) var isLaunchAtLoginEnabled = false
-    @Published private(set) var isUpdatingLaunchAtLogin = false
-    @Published var selectedKubeconfigPath: String?
     @Published private(set) var isProductionConnection = false
     @Published private(set) var errorPresentation: ErrorPresentation?
     @Published private(set) var settingsStatusMessage: String?
+    @Published private(set) var isUpdatingLaunchAtLogin = false
+    @Published private(set) var isDetectingTelepresencePath = false
+    @Published private(set) var isDetectingKubectlPath = false
+    @Published private(set) var detectedTelepresencePath: String?
+    @Published private(set) var detectedKubectlPath: String?
+
+    let settingsStore: AppSettingsStore
 
     private let environmentResolver: CommandEnvironmentResolver
     private let cli: TelepresenceCLI
     private let targetResolver: KubeTargetResolver
     private let logLocator = TelepresenceLogLocator()
-    private let defaults = UserDefaults.standard
     private let fileManager = FileManager.default
     private var pollingTask: Task<Void, Never>?
     private var hasAttemptedAutoReconnectForCurrentDrop = false
     private var userInitiatedDisconnect = false
     private var lastCommandFailure: CommandOutcome?
+    private var cancellables = Set<AnyCancellable>()
 
     var statusItemTitle: String {
         switch snapshot.state {
@@ -108,6 +71,34 @@ final class TelepresenceController: ObservableObject {
         snapshot.state != .busy
     }
 
+    var selectedKubeconfigPath: String? {
+        settingsStore.selectedKubeconfigPath
+    }
+
+    var selectedPollingInterval: PollingIntervalOption {
+        settingsStore.pollingInterval
+    }
+
+    var displayTelepresencePath: String {
+        displayPathText(for: detectedTelepresencePath)
+    }
+
+    var displayKubectlPath: String {
+        displayPathText(for: detectedKubectlPath)
+    }
+
+    var telepresencePathOverride: String? {
+        settingsStore.telepresencePathOverride
+    }
+
+    var kubectlPathOverride: String? {
+        settingsStore.kubectlPathOverride
+    }
+
+    var logDirectoryDisplay: String {
+        NSString(string: logLocator.logsDirectoryURL.path).abbreviatingWithTildeInPath
+    }
+
     var kubeconfigPickerLabel: String {
         if let selectedKubeconfigPath {
             return URL(fileURLWithPath: selectedKubeconfigPath).lastPathComponent
@@ -139,22 +130,22 @@ final class TelepresenceController: ObservableObject {
         targetMetadata.namespace ?? "\u{2014}"
     }
 
-    init() {
-        let environmentResolver = CommandEnvironmentResolver()
+    init(
+        settingsStore: AppSettingsStore,
+        environmentResolver: CommandEnvironmentResolver = CommandEnvironmentResolver()
+    ) {
+        self.settingsStore = settingsStore
         self.environmentResolver = environmentResolver
         cli = TelepresenceCLI(environmentResolver: environmentResolver)
         targetResolver = KubeTargetResolver(environmentResolver: environmentResolver)
 
-        let storedInterval = defaults.object(forKey: DefaultsKey.pollingIntervalSeconds) as? Int
-        selectedPollingInterval = PollingIntervalOption(rawValue: storedInterval ?? PollingIntervalOption.fiveMinutes.rawValue)
-            ?? .fiveMinutes
-        autoReconnectEnabled = defaults.object(forKey: DefaultsKey.autoReconnectEnabled) as? Bool ?? false
-        notificationsEnabled = defaults.object(forKey: DefaultsKey.notificationsEnabled) as? Bool ?? false
-        autoConnectOnLaunchEnabled = defaults.object(forKey: DefaultsKey.autoConnectOnLaunchEnabled) as? Bool ?? false
+        bindSettings()
 
         Task { [weak self] in
             guard let self else { return }
             self.refreshLaunchAtLoginState()
+            await self.syncEnvironmentSettings()
+            await self.refreshDetectedExecutables()
             await self.loadKubeconfigOptions()
             await self.performAutoConnectOnLaunchIfNeeded()
             self.startPolling()
@@ -192,52 +183,6 @@ final class TelepresenceController: ObservableObject {
         }
     }
 
-    func setPollingInterval(seconds: Int) {
-        let nextInterval = PollingIntervalOption(rawValue: seconds) ?? .fiveMinutes
-        guard selectedPollingInterval != nextInterval else { return }
-
-        selectedPollingInterval = nextInterval
-        defaults.set(nextInterval.rawValue, forKey: DefaultsKey.pollingIntervalSeconds)
-        restartPolling()
-    }
-
-    func setAutoReconnectEnabled(_ enabled: Bool) {
-        guard autoReconnectEnabled != enabled else { return }
-        autoReconnectEnabled = enabled
-        defaults.set(enabled, forKey: DefaultsKey.autoReconnectEnabled)
-    }
-
-    func setNotificationsEnabled(_ enabled: Bool) {
-        guard notificationsEnabled != enabled else { return }
-
-        if enabled {
-            requestNotificationPermission { [weak self] granted in
-                guard let self else { return }
-
-                if granted {
-                    self.notificationsEnabled = true
-                    self.defaults.set(true, forKey: DefaultsKey.notificationsEnabled)
-                    self.settingsStatusMessage = nil
-                } else {
-                    self.notificationsEnabled = false
-                    self.defaults.set(false, forKey: DefaultsKey.notificationsEnabled)
-                    self.settingsStatusMessage = "Notifications weren't enabled because macOS denied permission."
-                }
-            }
-            return
-        }
-
-        notificationsEnabled = false
-        defaults.set(false, forKey: DefaultsKey.notificationsEnabled)
-        settingsStatusMessage = nil
-    }
-
-    func setAutoConnectOnLaunchEnabled(_ enabled: Bool) {
-        guard autoConnectOnLaunchEnabled != enabled else { return }
-        autoConnectOnLaunchEnabled = enabled
-        defaults.set(enabled, forKey: DefaultsKey.autoConnectOnLaunchEnabled)
-    }
-
     func setLaunchAtLoginEnabled(_ enabled: Bool) {
         guard !isUpdatingLaunchAtLogin else { return }
 
@@ -257,16 +202,35 @@ final class TelepresenceController: ObservableObject {
         }
     }
 
+    func setNotificationEnabled(_ enabled: Bool, for event: AppNotificationEvent) {
+        if enabled {
+            requestNotificationPermission { [weak self] granted in
+                guard let self else { return }
+
+                if granted {
+                    self.settingsStore.setNotificationEnabled(true, for: event)
+                    self.settingsStatusMessage = nil
+                } else {
+                    self.settingsStore.setNotificationEnabled(false, for: event)
+                    self.settingsStatusMessage = "Notifications weren't enabled because macOS denied permission."
+                }
+            }
+            return
+        }
+
+        settingsStore.setNotificationEnabled(false, for: event)
+        settingsStatusMessage = nil
+    }
+
     func addAndSelectKubeconfig(path: String) {
         let normalizedPath = normalizePath(path)
         guard fileManager.fileExists(atPath: normalizedPath) else { return }
 
         let siblingPaths = scanKubeconfigFiles(in: URL(fileURLWithPath: normalizedPath).deletingLastPathComponent())
         mergeKubeconfigOptions(with: siblingPaths + [normalizedPath])
-        persistKubeconfigOptions()
+        settingsStore.setRememberedKubeconfigPaths(kubeconfigOptions.map(\.path))
+        settingsStore.setPinnedKubeconfigPath(normalizedPath)
 
-        selectedKubeconfigPath = normalizedPath
-        persistSelectedKubeconfigPath()
         targetMetadata = TargetMetadata(
             kubeconfigDisplay: NSString(string: normalizedPath).abbreviatingWithTildeInPath,
             kubeconfigMode: .pinned,
@@ -281,8 +245,95 @@ final class TelepresenceController: ObservableObject {
             busyMessage: "Switching kubeconfig and reconnecting...",
             switchingKubeconfig: true
         ) { cli in
-            await self.environmentResolver.setPinnedKubeconfigPath(normalizedPath)
+            await self.syncEnvironmentSettings()
+            await self.loadKubeconfigOptions()
+            await self.refreshTargetMetadata()
             return await cli.reconnect()
+        }
+    }
+
+    func changeKubeconfigPreferenceMode(to mode: KubeconfigPreferenceMode) {
+        let isAlreadySelected = settingsStore.kubeconfigPreferenceMode == mode
+        if isAlreadySelected, mode != .followEnvironment || settingsStore.selectedKubeconfigPath == nil {
+            return
+        }
+
+        userInitiatedDisconnect = false
+        runCommand(
+            busyMessage: "Reconnecting after kubeconfig mode change...",
+            switchingKubeconfig: true
+        ) { cli in
+            switch mode {
+            case .pinned:
+                self.settingsStore.setKubeconfigPreferenceMode(.pinned)
+            case .followEnvironment:
+                self.settingsStore.followEnvironmentForKubeconfig()
+            }
+
+            await self.syncEnvironmentSettings()
+            await self.loadKubeconfigOptions()
+            await self.refreshTargetMetadata()
+            return await cli.reconnect()
+        }
+    }
+
+    func detectTelepresencePath() {
+        guard !isDetectingTelepresencePath else { return }
+        isDetectingTelepresencePath = true
+        settingsStatusMessage = nil
+
+        Task {
+            let detectedPath = await environmentResolver.detectExecutable(
+                named: "telepresence",
+                envKey: "TELEPRESENCE_PATH",
+                wellKnownPaths: [
+                    "/usr/local/bin/telepresence",
+                    "/opt/homebrew/bin/telepresence",
+                    "/usr/bin/telepresence"
+                ]
+            )
+
+            if let detectedPath {
+                settingsStore.setTelepresencePathOverride(detectedPath)
+                await syncEnvironmentSettings()
+                await refreshDetectedExecutables()
+                await refreshStatus()
+                settingsStatusMessage = nil
+            } else {
+                settingsStatusMessage = "Couldn't detect telepresence from TELEPRESENCE_PATH or PATH."
+            }
+
+            isDetectingTelepresencePath = false
+        }
+    }
+
+    func detectKubectlPath() {
+        guard !isDetectingKubectlPath else { return }
+        isDetectingKubectlPath = true
+        settingsStatusMessage = nil
+
+        Task {
+            let detectedPath = await environmentResolver.detectExecutable(
+                named: "kubectl",
+                envKey: "KUBECTL_PATH",
+                wellKnownPaths: [
+                    "/usr/local/bin/kubectl",
+                    "/opt/homebrew/bin/kubectl",
+                    "/usr/bin/kubectl"
+                ]
+            )
+
+            if let detectedPath {
+                settingsStore.setKubectlPathOverride(detectedPath)
+                await syncEnvironmentSettings()
+                await refreshDetectedExecutables()
+                await refreshTargetMetadata()
+                settingsStatusMessage = nil
+            } else {
+                settingsStatusMessage = "Couldn't detect kubectl from KUBECTL_PATH or PATH."
+            }
+
+            isDetectingKubectlPath = false
         }
     }
 
@@ -297,33 +348,66 @@ final class TelepresenceController: ObservableObject {
         NSWorkspace.shared.open(url)
     }
 
+    func revealLogDirectory() {
+        let url = logLocator.logsDirectoryURL
+
+        if fileManager.fileExists(atPath: url.path) {
+            NSWorkspace.shared.open(url)
+            return
+        }
+
+        NSWorkspace.shared.open(url.deletingLastPathComponent())
+    }
+
+    private func bindSettings() {
+        settingsStore.$pollingInterval
+            .dropFirst()
+            .sink { [weak self] _ in
+                self?.restartPolling()
+            }
+            .store(in: &cancellables)
+    }
+
+    private func syncEnvironmentSettings() async {
+        await environmentResolver.apply(settings: settingsStore.makeEnvironmentSnapshot())
+    }
+
+    private func refreshDetectedExecutables() async {
+        detectedTelepresencePath = await environmentResolver.resolveExecutable(
+            named: "telepresence",
+            envKey: "TELEPRESENCE_PATH",
+            wellKnownPaths: [
+                "/usr/local/bin/telepresence",
+                "/opt/homebrew/bin/telepresence",
+                "/usr/bin/telepresence"
+            ]
+        )
+
+        detectedKubectlPath = await environmentResolver.resolveExecutable(
+            named: "kubectl",
+            envKey: "KUBECTL_PATH",
+            wellKnownPaths: [
+                "/usr/local/bin/kubectl",
+                "/opt/homebrew/bin/kubectl",
+                "/usr/bin/kubectl"
+            ]
+        )
+    }
+
     private func loadKubeconfigOptions() async {
         let discoveredPaths = scanDefaultKubeconfigDirectory()
-        let rememberedPaths = loadRememberedKubeconfigPaths()
+        let rememberedPaths = settingsStore.rememberedKubeconfigPaths.filter { fileManager.fileExists(atPath: $0) }
         let resolvedPaths = await environmentResolver.resolvedKubeconfigPaths()
 
         mergeKubeconfigOptions(with: discoveredPaths + rememberedPaths + resolvedPaths)
+        settingsStore.setRememberedKubeconfigPaths(kubeconfigOptions.map(\.path))
 
-        let savedSelection = defaults.string(forKey: DefaultsKey.selectedKubeconfigPath).map(normalizePath)
-        let hasExplicitSelection = defaults.object(forKey: DefaultsKey.hasExplicitKubeconfigSelection) as? Bool ?? false
-
-        let shouldTreatSavedSelectionAsPinned: Bool
-        if hasExplicitSelection {
-            shouldTreatSavedSelectionAsPinned = true
-        } else if let savedSelection {
-            shouldTreatSavedSelectionAsPinned = resolvedPaths.contains(savedSelection) == false
-        } else {
-            shouldTreatSavedSelectionAsPinned = false
+        if settingsStore.kubeconfigPreferenceMode == .pinned,
+           let selectedKubeconfigPath = settingsStore.selectedKubeconfigPath,
+           existingOptionPath(matching: selectedKubeconfigPath) == nil {
+            settingsStore.setPinnedKubeconfigPath(nil)
+            await syncEnvironmentSettings()
         }
-
-        selectedKubeconfigPath = shouldTreatSavedSelectionAsPinned
-            ? savedSelection.flatMap(existingOptionPath(matching:))
-            : nil
-
-        await environmentResolver.setPinnedKubeconfigPath(selectedKubeconfigPath)
-        persistSelectedKubeconfigPath()
-        persistKubeconfigOptions()
-        await refreshTargetMetadata()
     }
 
     private func startPolling() {
@@ -336,8 +420,12 @@ final class TelepresenceController: ObservableObject {
         pollingTask = Task {
             await refreshStatus()
 
+            guard let interval = settingsStore.pollingInterval.duration else {
+                return
+            }
+
             while !Task.isCancelled {
-                try? await Task.sleep(for: selectedPollingInterval.duration)
+                try? await Task.sleep(for: interval)
                 guard !Task.isCancelled else { return }
                 await refreshStatus()
             }
@@ -365,7 +453,11 @@ final class TelepresenceController: ObservableObject {
             if outcome.success == false {
                 lastCommandFailure = outcome
                 if isAutoReconnect {
-                    await postNotification(title: "Auto-reconnect failed", body: outcome.summary)
+                    await postNotification(
+                        event: .autoReconnectFailed,
+                        title: "Auto-reconnect failed",
+                        body: outcome.summary
+                    )
                 }
             } else {
                 lastCommandFailure = nil
@@ -382,6 +474,7 @@ final class TelepresenceController: ObservableObject {
         let updatedSnapshot = await cli.fetchStatus()
         snapshot = updatedSnapshot
         await refreshTargetMetadata()
+        await refreshDetectedExecutables()
         updateDerivedPresentation(for: updatedSnapshot)
 
         if updatedSnapshot.state == .connected {
@@ -391,9 +484,17 @@ final class TelepresenceController: ObservableObject {
         }
 
         if previousState == .connected && updatedSnapshot.state == .disconnected {
-            await postNotification(title: "Telepresence disconnected", body: updatedSnapshot.detailText)
+            await postNotification(
+                event: .connectionDropped,
+                title: "Telepresence disconnected",
+                body: updatedSnapshot.detailText
+            )
         } else if (previousState == .disconnected || previousState == .error) && updatedSnapshot.state == .connected {
-            await postNotification(title: "Telepresence connected", body: updatedSnapshot.detailText)
+            await postNotification(
+                event: .connectionEstablished,
+                title: "Telepresence connected",
+                body: updatedSnapshot.detailText
+            )
         }
 
         guard shouldAttemptAutoReconnect(from: previousState, to: updatedSnapshot.state) else {
@@ -423,7 +524,7 @@ final class TelepresenceController: ObservableObject {
     }
 
     private func performAutoConnectOnLaunchIfNeeded() async {
-        guard autoConnectOnLaunchEnabled else { return }
+        guard settingsStore.autoConnectOnLaunchEnabled else { return }
 
         let initialSnapshot = await cli.fetchStatus()
         snapshot = initialSnapshot
@@ -438,11 +539,19 @@ final class TelepresenceController: ObservableObject {
 
         let outcome = await cli.connect()
         if outcome.success {
-            await postNotification(title: "Telepresence connected", body: outcome.summary)
+            await postNotification(
+                event: .connectionEstablished,
+                title: "Telepresence connected",
+                body: outcome.summary
+            )
             lastCommandFailure = nil
         } else {
             lastCommandFailure = outcome
-            await postNotification(title: "Auto-connect failed", body: outcome.summary)
+            await postNotification(
+                event: .autoConnectFailed,
+                title: "Auto-connect failed",
+                body: outcome.summary
+            )
         }
 
         await refreshStatus()
@@ -493,13 +602,6 @@ final class TelepresenceController: ObservableObject {
         return false
     }
 
-    private func loadRememberedKubeconfigPaths() -> [String] {
-        let storedPaths = defaults.stringArray(forKey: DefaultsKey.rememberedKubeconfigPaths) ?? []
-        return storedPaths
-            .map(normalizePath)
-            .filter { fileManager.fileExists(atPath: $0) }
-    }
-
     private func mergeKubeconfigOptions(with paths: [String]) {
         let validPaths = paths
             .map(normalizePath)
@@ -519,26 +621,12 @@ final class TelepresenceController: ObservableObject {
         kubeconfigOptions.first(where: { $0.path == path })?.path
     }
 
-    private func persistKubeconfigOptions() {
-        defaults.set(kubeconfigOptions.map(\.path), forKey: DefaultsKey.rememberedKubeconfigPaths)
-    }
-
-    private func persistSelectedKubeconfigPath() {
-        if let selectedKubeconfigPath {
-            defaults.set(selectedKubeconfigPath, forKey: DefaultsKey.selectedKubeconfigPath)
-            defaults.set(true, forKey: DefaultsKey.hasExplicitKubeconfigSelection)
-        } else {
-            defaults.removeObject(forKey: DefaultsKey.selectedKubeconfigPath)
-            defaults.set(false, forKey: DefaultsKey.hasExplicitKubeconfigSelection)
-        }
-    }
-
     private func normalizePath(_ path: String) -> String {
         URL(fileURLWithPath: path).standardizedFileURL.path
     }
 
     private func refreshLaunchAtLoginState() {
-        isLaunchAtLoginEnabled = LaunchAtLoginManager.isEnabled
+        settingsStore.setLaunchAtLoginEnabledState(LaunchAtLoginManager.isEnabled)
     }
 
     private func requestNotificationPermission(completion: @escaping (Bool) -> Void) {
@@ -549,8 +637,8 @@ final class TelepresenceController: ObservableObject {
         }
     }
 
-    private func postNotification(title: String, body: String) async {
-        guard notificationsEnabled else { return }
+    private func postNotification(event: AppNotificationEvent, title: String, body: String) async {
+        guard settingsStore.isNotificationEnabled(for: event) else { return }
 
         let center = UNUserNotificationCenter.current()
         let settings = await center.notificationSettings()
@@ -576,7 +664,7 @@ final class TelepresenceController: ObservableObject {
         from previousState: TelepresenceStatusSnapshot.State,
         to nextState: TelepresenceStatusSnapshot.State
     ) -> Bool {
-        autoReconnectEnabled &&
+        settingsStore.autoReconnectEnabled &&
         !userInitiatedDisconnect &&
         !hasAttemptedAutoReconnectForCurrentDrop &&
         previousState == .connected &&
@@ -604,23 +692,12 @@ final class TelepresenceController: ObservableObject {
 
         errorPresentation = nil
     }
-}
 
-private enum LaunchAtLoginManager {
-    static var isEnabled: Bool {
-        switch SMAppService.mainApp.status {
-        case .enabled, .requiresApproval:
-            return true
-        default:
-            return false
+    private func displayPathText(for path: String?) -> String {
+        guard let path else {
+            return "Not found"
         }
-    }
 
-    static func setEnabled(_ enabled: Bool) throws {
-        if enabled {
-            try SMAppService.mainApp.register()
-        } else {
-            try SMAppService.mainApp.unregister()
-        }
+        return NSString(string: path).abbreviatingWithTildeInPath
     }
 }

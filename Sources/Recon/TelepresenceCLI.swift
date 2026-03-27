@@ -53,10 +53,6 @@ actor TelepresenceCLI {
         self.environmentResolver = environmentResolver
     }
 
-    func setKubeconfigPath(_ path: String?) async {
-        await environmentResolver.setPinnedKubeconfigPath(path)
-    }
-
     func fetchStatus() async -> TelepresenceStatusSnapshot {
         guard let executable = await resolveExecutable() else {
             return TelepresenceStatusSnapshot(
