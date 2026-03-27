@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="Resources/AppIcon.appiconset/256.png" width="96">
+  <img src="Resources/Assets.xcassets/AppIcon.appiconset/256.png" width="96">
 </p>
 
 <h1 align="center">Recon</h1>
