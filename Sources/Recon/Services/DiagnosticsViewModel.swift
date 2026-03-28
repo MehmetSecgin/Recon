@@ -55,10 +55,18 @@ final class DiagnosticsViewModel: ObservableObject {
     private var isWindowActive = false
     private var lastBackfillAt: Date?
 
+    convenience init(controller: TelepresenceController) {
+        self.init(
+            controller: controller,
+            historyStore: EventHistoryStore(),
+            logService: DiagnosticsLogService()
+        )
+    }
+
     init(
         controller: TelepresenceController,
-        historyStore: EventHistoryStore = EventHistoryStore(),
-        logService: DiagnosticsLogService = DiagnosticsLogService()
+        historyStore: EventHistoryStore,
+        logService: DiagnosticsLogService
     ) {
         self.controller = controller
         self.historyStore = historyStore
