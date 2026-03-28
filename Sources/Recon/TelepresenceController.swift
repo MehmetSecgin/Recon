@@ -629,8 +629,9 @@ final class TelepresenceController: ObservableObject {
         return AsyncStream { continuation in
             diagnosticsEventContinuations[streamID] = continuation
             continuation.onTermination = { @Sendable [weak self] _ in
-                Task { @MainActor in
-                    self?.diagnosticsEventContinuations.removeValue(forKey: streamID)
+                guard let self else { return }
+                Task { @MainActor [self, streamID] in
+                    self.diagnosticsEventContinuations.removeValue(forKey: streamID)
                 }
             }
         }
