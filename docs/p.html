@@ -1,0 +1,385 @@
+
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+:root {
+  --win-bg: #1e1e1e;
+  --win-bg2: #252526;
+  --win-border: rgba(255,255,255,0.08);
+  --text1: #e0e0e0;
+  --text2: #999;
+  --text3: #666;
+  --tab-active: rgba(255,255,255,0.08);
+  --row-hover: rgba(255,255,255,0.04);
+  --row-selected: rgba(56,132,244,0.18);
+  --green: #32d74b;
+  --orange: #ff9f0a;
+  --red: #ff453a;
+  --gray: #636366;
+  --blue-accent: #0a84ff;
+  --hint-bg: rgba(255,255,255,0.06);
+  --hint-border: rgba(255,255,255,0.1);
+  --separator: rgba(255,255,255,0.06);
+}
+@media (prefers-color-scheme: light) {
+  :root {
+    --win-bg: #f5f5f5;
+    --win-bg2: #ffffff;
+    --win-border: rgba(0,0,0,0.12);
+    --text1: #1d1d1f;
+    --text2: #6e6e73;
+    --text3: #aeaeb2;
+    --tab-active: rgba(0,0,0,0.06);
+    --row-hover: rgba(0,0,0,0.03);
+    --row-selected: rgba(0,122,255,0.12);
+    --green: #34c759;
+    --orange: #ff9500;
+    --red: #ff3b30;
+    --gray: #8e8e93;
+    --blue-accent: #007aff;
+    --hint-bg: rgba(0,0,0,0.03);
+    --hint-border: rgba(0,0,0,0.08);
+    --separator: rgba(0,0,0,0.06);
+  }
+}
+.window {
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
+  background: var(--win-bg2);
+  border-radius: 10px;
+  border: 0.5px solid var(--win-border);
+  overflow: hidden;
+  max-width: 760px;
+  margin: 0 auto;
+  color: var(--text1);
+  font-size: 13px;
+  -webkit-font-smoothing: antialiased;
+}
+.titlebar {
+  background: var(--win-bg);
+  padding: 10px 16px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border-bottom: 0.5px solid var(--win-border);
+  position: relative;
+}
+.traffic {
+  display: flex;
+  gap: 6px;
+}
+.dot { width: 12px; height: 12px; border-radius: 50%; }
+.dot.r { background: #ff5f57; }
+.dot.y { background: #febc2e; }
+.dot.g { background: #28c840; }
+.title-text {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text2);
+}
+.tabs {
+  display: flex;
+  gap: 2px;
+  padding: 8px 16px;
+  background: var(--win-bg);
+  border-bottom: 0.5px solid var(--win-border);
+}
+.tab {
+  padding: 5px 14px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text2);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  transition: background .15s;
+  user-select: none;
+}
+.tab:hover { background: var(--tab-active); }
+.tab.active {
+  background: var(--tab-active);
+  color: var(--text1);
+}
+.tab .badge {
+  font-size: 10px;
+  font-weight: 600;
+  background: var(--red);
+  color: #fff;
+  padding: 1px 5px;
+  border-radius: 8px;
+  min-width: 16px;
+  text-align: center;
+}
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  border-bottom: 0.5px solid var(--win-border);
+  background: var(--win-bg2);
+}
+.search {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--win-bg);
+  border: 0.5px solid var(--win-border);
+  border-radius: 6px;
+  padding: 5px 10px;
+  font-size: 12px;
+  color: var(--text3);
+}
+.search svg { flex-shrink: 0; opacity: 0.4; }
+.toolbar-btn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 10px;
+  border-radius: 6px;
+  border: 0.5px solid var(--win-border);
+  background: var(--win-bg);
+  color: var(--text2);
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.toolbar-btn:hover { background: var(--tab-active); }
+.toolbar-btn svg { opacity: 0.6; }
+.ns-picker {
+  display: flex; align-items: center; gap: 4px;
+  padding: 5px 10px;
+  border-radius: 6px;
+  border: 0.5px solid var(--win-border);
+  background: var(--win-bg);
+  color: var(--text1);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+}
+.ns-picker span.label { color: var(--text3); font-weight: 400; }
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  table-layout: fixed;
+}
+thead th {
+  text-align: left;
+  padding: 6px 12px;
+  font-weight: 500;
+  font-size: 11px;
+  color: var(--text3);
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  border-bottom: 0.5px solid var(--win-border);
+  background: var(--win-bg2);
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+}
+thead th:hover { color: var(--text2); }
+thead th.sorted { color: var(--text1); }
+thead th .arrow { font-size: 9px; margin-left: 2px; }
+.col-name { width: 32%; }
+.col-status { width: 22%; }
+.col-ready { width: 12%; }
+.col-restarts { width: 14%; }
+.col-age { width: 12%; }
+tbody tr {
+  border-bottom: 0.5px solid var(--separator);
+  transition: background .1s;
+}
+tbody tr:nth-child(even) { background: rgba(128,128,128,0.03); }
+tbody tr:hover { background: var(--row-hover); }
+tbody tr.selected { background: var(--row-selected); }
+td { padding: 7px 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.status-cell { display: flex; align-items: center; gap: 6px; }
+.status-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+.status-text { font-weight: 500; }
+.restarts-warn { color: var(--orange); }
+.hint-strip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 16px;
+  border-top: 0.5px solid var(--win-border);
+  background: var(--win-bg2);
+  font-size: 11px;
+  color: var(--text3);
+  min-height: 30px;
+}
+.hint-label { flex-shrink: 0; }
+.hint-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  background: var(--hint-bg);
+  border: 0.5px solid var(--hint-border);
+  color: var(--blue-accent);
+  font-size: 11px;
+  cursor: pointer;
+  transition: background .1s;
+}
+.hint-chip:hover { background: rgba(10,132,255,0.1); }
+.hint-chip svg { opacity: 0.5; }
+.statusbar {
+  display: flex;
+  align-items: center;
+  padding: 5px 16px;
+  border-top: 0.5px solid var(--win-border);
+  background: var(--win-bg);
+  font-size: 11px;
+  color: var(--text3);
+  gap: 12px;
+}
+.statusbar .count { color: var(--text2); }
+.statusbar .fwd { color: var(--blue-accent); cursor: pointer; display: flex; align-items: center; gap: 4px; }
+.statusbar .ctx { margin-left: auto; display: flex; align-items: center; gap: 4px; }
+.statusbar .ctx span.val { color: var(--text2); font-family: "SF Mono", "Menlo", monospace; font-size: 10px; }
+</style>
+
+<div class="window">
+  <div class="titlebar">
+    <div class="traffic"><div class="dot r"></div><div class="dot y"></div><div class="dot g"></div></div>
+    <span class="title-text">Recon — Cluster</span>
+  </div>
+
+  <div class="tabs">
+    <div class="tab active">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+      Pods <span class="badge">3</span>
+    </div>
+    <div class="tab">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
+      Deployments
+    </div>
+    <div class="tab">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h16v16H4z"/><path d="M9 9h6v6H9z"/></svg>
+      Services
+    </div>
+    <div class="tab">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 12l10 10 10-10L12 2z"/></svg>
+      Ingresses
+    </div>
+  </div>
+
+  <div class="toolbar">
+    <div class="search">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
+      Filter pods…
+    </div>
+    <div class="toolbar-btn">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 4v6h-6"/><path d="M1 20v-6h6"/><path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/></svg>
+    </div>
+    <div class="ns-picker">
+      <span class="label">ns:</span> default
+      <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M6 9l6 6 6-6"/></svg>
+    </div>
+  </div>
+
+  <div style="overflow-x:auto;">
+    <table>
+      <thead>
+        <tr>
+          <th class="col-name sorted">Name <span class="arrow">▲</span></th>
+          <th class="col-status sorted">Status <span class="arrow">▲</span></th>
+          <th class="col-ready">Ready</th>
+          <th class="col-restarts">Restarts</th>
+          <th class="col-age">Age</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td style="font-family:'SF Mono','Menlo',monospace;font-size:11px;">payment-worker-7f8d2</td>
+          <td><div class="status-cell"><div class="status-dot" style="background:var(--red)"></div><span class="status-text" style="color:var(--red)">CrashLoopBackOff</span></div></td>
+          <td>0/1</td>
+          <td class="restarts-warn">142</td>
+          <td>2d</td>
+        </tr>
+        <tr>
+          <td style="font-family:'SF Mono','Menlo',monospace;font-size:11px;">auth-service-c94b1</td>
+          <td><div class="status-cell"><div class="status-dot" style="background:var(--red)"></div><span class="status-text" style="color:var(--red)">ImagePullBackOff</span></div></td>
+          <td>0/1</td>
+          <td>0</td>
+          <td>14m</td>
+        </tr>
+        <tr class="selected">
+          <td style="font-family:'SF Mono','Menlo',monospace;font-size:11px;">api-gateway-5d4e8</td>
+          <td><div class="status-cell"><div class="status-dot" style="background:var(--orange)"></div><span class="status-text" style="color:var(--orange)">Pending</span></div></td>
+          <td>0/2</td>
+          <td>0</td>
+          <td>3m</td>
+        </tr>
+        <tr>
+          <td style="font-family:'SF Mono','Menlo',monospace;font-size:11px;">api-gateway-a12c3</td>
+          <td><div class="status-cell"><div class="status-dot" style="background:var(--green)"></div><span class="status-text" style="color:var(--green)">Running</span></div></td>
+          <td>2/2</td>
+          <td>0</td>
+          <td>5d</td>
+        </tr>
+        <tr>
+          <td style="font-family:'SF Mono','Menlo',monospace;font-size:11px;">cart-service-bf920</td>
+          <td><div class="status-cell"><div class="status-dot" style="background:var(--green)"></div><span class="status-text" style="color:var(--green)">Running</span></div></td>
+          <td>1/1</td>
+          <td>1</td>
+          <td>12d</td>
+        </tr>
+        <tr>
+          <td style="font-family:'SF Mono','Menlo',monospace;font-size:11px;">notification-svc-d7f41</td>
+          <td><div class="status-cell"><div class="status-dot" style="background:var(--green)"></div><span class="status-text" style="color:var(--green)">Running</span></div></td>
+          <td>1/1</td>
+          <td>0</td>
+          <td>8d</td>
+        </tr>
+        <tr>
+          <td style="font-family:'SF Mono','Menlo',monospace;font-size:11px;">order-processor-e3a09</td>
+          <td><div class="status-cell"><div class="status-dot" style="background:var(--green)"></div><span class="status-text" style="color:var(--green)">Running</span></div></td>
+          <td>3/3</td>
+          <td>0</td>
+          <td>5d</td>
+        </tr>
+        <tr>
+          <td style="font-family:'SF Mono','Menlo',monospace;font-size:11px;">redis-cache-0</td>
+          <td><div class="status-cell"><div class="status-dot" style="background:var(--green)"></div><span class="status-text" style="color:var(--green)">Running</span></div></td>
+          <td>1/1</td>
+          <td>0</td>
+          <td>30d</td>
+        </tr>
+        <tr>
+          <td style="font-family:'SF Mono','Menlo',monospace;font-size:11px;">cron-cleanup-x9k2p</td>
+          <td><div class="status-cell"><div class="status-dot" style="background:var(--gray)"></div><span style="color:var(--text3)">Succeeded</span></div></td>
+          <td>0/1</td>
+          <td>0</td>
+          <td>1h</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="hint-strip">
+    <span class="hint-label">Related:</span>
+    <div class="hint-chip">
+      <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
+      api-gateway
+    </div>
+    <div class="hint-chip">
+      <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h16v16H4z"/><path d="M9 9h6v6H9z"/></svg>
+      api-gateway-svc
+    </div>
+  </div>
+
+  <div class="statusbar">
+    <span class="count">9 pods</span>
+    <span class="fwd">
+      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M7 17l9.2-9.2M17 17V7.8H7.8"/></svg>
+      3 forwards active
+    </span>
+    <span class="ctx">ctx: <span class="val">prod-eu-west-1</span></span>
+  </div>
+</div>

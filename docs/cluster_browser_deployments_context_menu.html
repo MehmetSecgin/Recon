@@ -1,0 +1,210 @@
+
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+:root {
+  --win-bg: #1e1e1e; --win-bg2: #252526; --win-border: rgba(255,255,255,0.08);
+  --text1: #e0e0e0; --text2: #999; --text3: #666;
+  --tab-active: rgba(255,255,255,0.08); --row-hover: rgba(255,255,255,0.04);
+  --row-selected: rgba(56,132,244,0.18);
+  --green: #32d74b; --orange: #ff9f0a; --red: #ff453a; --gray: #636366;
+  --blue-accent: #0a84ff; --separator: rgba(255,255,255,0.06);
+  --menu-bg: #2d2d2d; --menu-border: rgba(255,255,255,0.15); --menu-hover: rgba(255,255,255,0.08);
+  --menu-sep: rgba(255,255,255,0.08);
+}
+@media (prefers-color-scheme: light) {
+  :root {
+    --win-bg: #f5f5f5; --win-bg2: #ffffff; --win-border: rgba(0,0,0,0.12);
+    --text1: #1d1d1f; --text2: #6e6e73; --text3: #aeaeb2;
+    --tab-active: rgba(0,0,0,0.06); --row-hover: rgba(0,0,0,0.03);
+    --row-selected: rgba(0,122,255,0.12);
+    --green: #34c759; --orange: #ff9500; --red: #ff3b30; --gray: #8e8e93;
+    --blue-accent: #007aff; --separator: rgba(0,0,0,0.06);
+    --menu-bg: #ffffff; --menu-border: rgba(0,0,0,0.18); --menu-hover: rgba(0,0,0,0.06);
+    --menu-sep: rgba(0,0,0,0.08);
+  }
+}
+.window {
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif;
+  background: var(--win-bg2); border-radius: 10px; border: 0.5px solid var(--win-border);
+  overflow: visible; max-width: 760px; margin: 0 auto; color: var(--text1); font-size: 13px;
+  -webkit-font-smoothing: antialiased; position: relative;
+}
+.titlebar { background: var(--win-bg); padding: 10px 16px; display: flex; align-items: center; gap: 8px; border-bottom: 0.5px solid var(--win-border); position: relative; border-radius: 10px 10px 0 0; }
+.traffic { display: flex; gap: 6px; }
+.dot { width: 12px; height: 12px; border-radius: 50%; }
+.dot.r { background: #ff5f57; } .dot.y { background: #febc2e; } .dot.g { background: #28c840; }
+.title-text { position: absolute; left: 50%; transform: translateX(-50%); font-size: 13px; font-weight: 500; color: var(--text2); }
+.tabs { display: flex; gap: 2px; padding: 8px 16px; background: var(--win-bg); border-bottom: 0.5px solid var(--win-border); }
+.tab { padding: 5px 14px; border-radius: 6px; font-size: 12px; font-weight: 500; color: var(--text2); display: flex; align-items: center; gap: 5px; user-select: none; }
+.tab.active { background: var(--tab-active); color: var(--text1); }
+.toolbar { display: flex; align-items: center; gap: 8px; padding: 8px 16px; border-bottom: 0.5px solid var(--win-border); }
+.search { flex:1; display:flex; align-items:center; gap:6px; background:var(--win-bg); border:0.5px solid var(--win-border); border-radius:6px; padding:5px 10px; font-size:12px; color:var(--text3); }
+.search svg { flex-shrink:0; opacity:0.4; }
+.toolbar-btn { display:flex; align-items:center; padding:5px 10px; border-radius:6px; border:0.5px solid var(--win-border); background:var(--win-bg); color:var(--text2); font-size:12px; }
+.ns-picker { display:flex; align-items:center; gap:4px; padding:5px 10px; border-radius:6px; border:0.5px solid var(--win-border); background:var(--win-bg); color:var(--text1); font-size:12px; font-weight:500; }
+.ns-picker .label { color: var(--text3); font-weight: 400; }
+table { width: 100%; border-collapse: collapse; font-size: 12px; table-layout: fixed; }
+thead th { text-align:left; padding:6px 12px; font-weight:500; font-size:11px; color:var(--text3); text-transform:uppercase; letter-spacing:0.3px; border-bottom:0.5px solid var(--win-border); white-space:nowrap; user-select:none; }
+.col-name { width: 30%; } .col-ready { width: 14%; } .col-uptodate { width: 16%; } .col-avail { width: 16%; } .col-age { width: 12%; }
+tbody tr { border-bottom: 0.5px solid var(--separator); transition: background .1s; }
+tbody tr:nth-child(even) { background: rgba(128,128,128,0.03); }
+tbody tr:hover { background: var(--row-hover); }
+tbody tr.selected { background: var(--row-selected); }
+td { padding: 7px 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mono { font-family: "SF Mono","Menlo",monospace; font-size: 11px; }
+.ready-cell { display: flex; align-items: center; gap: 6px; }
+.status-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+.statusbar { display:flex; align-items:center; padding:5px 16px; border-top:0.5px solid var(--win-border); background:var(--win-bg); font-size:11px; color:var(--text3); gap:12px; border-radius: 0 0 10px 10px; }
+.statusbar .count { color:var(--text2); }
+.statusbar .ctx { margin-left:auto; display:flex; align-items:center; gap:4px; }
+.statusbar .ctx .val { color:var(--text2); font-family:"SF Mono","Menlo",monospace; font-size:10px; }
+
+.ctx-menu {
+  position: absolute;
+  top: 310px; left: 200px;
+  background: var(--menu-bg);
+  border: 0.5px solid var(--menu-border);
+  border-radius: 8px;
+  padding: 4px;
+  min-width: 220px;
+  z-index: 100;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.35), 0 1px 4px rgba(0,0,0,0.15);
+  backdrop-filter: blur(40px);
+  -webkit-backdrop-filter: blur(40px);
+}
+.ctx-item {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 5px 10px; border-radius: 5px; font-size: 13px; color: var(--text1); cursor: default;
+}
+.ctx-item:hover { background: var(--blue-accent); color: #fff; }
+.ctx-item:hover .shortcut { color: rgba(255,255,255,0.6); }
+.ctx-item.destructive { color: var(--red); }
+.ctx-item.destructive:hover { background: var(--red); color: #fff; }
+.shortcut { font-size: 11px; color: var(--text3); font-family: "SF Mono","Menlo",monospace; }
+.ctx-sep { height: 0.5px; background: var(--menu-sep); margin: 4px 10px; }
+.ctx-icon { width: 14px; display: inline-flex; align-items: center; margin-right: 6px; opacity: 0.7; }
+</style>
+
+<div class="window">
+  <div class="titlebar">
+    <div class="traffic"><div class="dot r"></div><div class="dot y"></div><div class="dot g"></div></div>
+    <span class="title-text">Recon — Cluster</span>
+  </div>
+  <div class="tabs">
+    <div class="tab">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+      Pods
+    </div>
+    <div class="tab active">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
+      Deployments
+    </div>
+    <div class="tab">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h16v16H4z"/><path d="M9 9h6v6H9z"/></svg>
+      Services
+    </div>
+    <div class="tab">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 12l10 10 10-10L12 2z"/></svg>
+      Ingresses
+    </div>
+  </div>
+  <div class="toolbar">
+    <div class="search">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
+      Filter deployments…
+    </div>
+    <div class="toolbar-btn">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 4v6h-6"/><path d="M1 20v-6h6"/><path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/></svg>
+    </div>
+    <div class="ns-picker">
+      <span class="label">ns:</span> default
+      <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M6 9l6 6 6-6"/></svg>
+    </div>
+  </div>
+
+  <table>
+    <thead>
+      <tr>
+        <th class="col-name">Name</th>
+        <th class="col-ready">Ready</th>
+        <th class="col-uptodate">Up-to-date</th>
+        <th class="col-avail">Available</th>
+        <th class="col-age">Age</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td class="mono">auth-service</td>
+        <td><div class="ready-cell"><div class="status-dot" style="background:var(--red)"></div>0/2</div></td>
+        <td>0</td>
+        <td style="color:var(--red);font-weight:500">0</td>
+        <td>14m</td>
+      </tr>
+      <tr>
+        <td class="mono">payment-worker</td>
+        <td><div class="ready-cell"><div class="status-dot" style="background:var(--orange)"></div>1/3</div></td>
+        <td>3</td>
+        <td style="color:var(--orange);font-weight:500">1</td>
+        <td>45d</td>
+      </tr>
+      <tr class="selected">
+        <td class="mono">api-gateway</td>
+        <td><div class="ready-cell"><div class="status-dot" style="background:var(--green)"></div>3/3</div></td>
+        <td>3</td>
+        <td>3</td>
+        <td>12d</td>
+      </tr>
+      <tr>
+        <td class="mono">cart-service</td>
+        <td><div class="ready-cell"><div class="status-dot" style="background:var(--green)"></div>2/2</div></td>
+        <td>2</td>
+        <td>2</td>
+        <td>12d</td>
+      </tr>
+      <tr>
+        <td class="mono">notification-svc</td>
+        <td><div class="ready-cell"><div class="status-dot" style="background:var(--green)"></div>1/1</div></td>
+        <td>1</td>
+        <td>1</td>
+        <td>30d</td>
+      </tr>
+      <tr>
+        <td class="mono">order-processor</td>
+        <td><div class="ready-cell"><div class="status-dot" style="background:var(--green)"></div>3/3</div></td>
+        <td>3</td>
+        <td>3</td>
+        <td>5d</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="statusbar">
+    <span class="count">6 deployments</span>
+    <span class="ctx">ctx: <span class="val">prod-eu-west-1</span></span>
+  </div>
+
+  <div class="ctx-menu">
+    <div class="ctx-item">
+      <span><span class="ctx-icon"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 4v6h-6"/><path d="M1 20v-6h6"/><path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/></svg></span>Restart deployment</span>
+      <span class="shortcut">⇧⌘R</span>
+    </div>
+    <div class="ctx-item">
+      <span><span class="ctx-icon"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20V4M5 11l7-7 7 7"/></svg></span>Scale replicas…</span>
+      <span class="shortcut"></span>
+    </div>
+    <div class="ctx-sep"></div>
+    <div class="ctx-item">
+      <span><span class="ctx-icon"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg></span>Copy kubectl command</span>
+      <span class="shortcut">⇧⌘C</span>
+    </div>
+    <div class="ctx-sep"></div>
+    <div class="ctx-item">
+      <span><span class="ctx-icon"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg></span>Show pods</span>
+      <span class="shortcut"></span>
+    </div>
+    <div class="ctx-item">
+      <span><span class="ctx-icon"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h16v16H4z"/><path d="M9 9h6v6H9z"/></svg></span>Show services</span>
+      <span class="shortcut"></span>
+    </div>
+  </div>
+</div>
