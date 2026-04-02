@@ -41,23 +41,20 @@ enum DiagnosticsLogLevel: String, CaseIterable, Identifiable, Sendable {
 
 struct DiagnosticsLogEntry: Identifiable, Equatable, Sendable {
     let id: UUID
-    let rawLine: String
+    let text: String
     let timestampText: String?
     let level: DiagnosticsLogLevel
-    let messageText: String
 
     init(
         id: UUID = UUID(),
-        rawLine: String,
+        text: String,
         timestampText: String?,
-        level: DiagnosticsLogLevel,
-        messageText: String
+        level: DiagnosticsLogLevel
     ) {
         self.id = id
-        self.rawLine = rawLine
+        self.text = text
         self.timestampText = timestampText
         self.level = level
-        self.messageText = messageText
     }
 }
 

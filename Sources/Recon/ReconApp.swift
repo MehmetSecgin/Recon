@@ -5,17 +5,23 @@ import SwiftUI
 struct ReconApp: App {
     @StateObject private var settingsStore: AppSettingsStore
     @StateObject private var controller: TelepresenceController
-    @StateObject private var diagnosticsViewModel: DiagnosticsViewModel
+    private let diagnosticsEventRecorder: DiagnosticsEventRecorder
 
     init() {
         let settingsStore = AppSettingsStore()
-        let controller = TelepresenceController(settingsStore: settingsStore)
+        let environmentResolver = CommandEnvironmentResolver()
+        let controller = TelepresenceController(
+            settingsStore: settingsStore,
+            environmentResolver: environmentResolver
+        )
         _settingsStore = StateObject(wrappedValue: settingsStore)
         _controller = StateObject(wrappedValue: controller)
-        _diagnosticsViewModel = StateObject(wrappedValue: DiagnosticsViewModel(controller: controller))
+        diagnosticsEventRecorder = DiagnosticsEventRecorder(controller: controller)
     }
 
     var body: some Scene {
+        let _ = diagnosticsEventRecorder
+
         MenuBarExtra {
             ReconMenuView(controller: controller)
         } label: {
@@ -34,9 +40,15 @@ struct ReconApp: App {
         .windowResizability(.contentSize)
 
         Window("Recon — Diagnostics", id: AppWindowID.diagnostics) {
-            DiagnosticsWindowView(viewModel: diagnosticsViewModel)
+            DiagnosticsWindowSceneView(controller: controller)
         }
         .defaultSize(width: 560, height: 520)
+        .windowResizability(.contentSize)
+
+        Window("Recon — Cluster", id: AppWindowID.cluster) {
+            ClusterBrowserWindowSceneView(settingsStore: settingsStore)
+        }
+        .defaultSize(width: 720, height: 520)
         .windowResizability(.contentSize)
     }
 }

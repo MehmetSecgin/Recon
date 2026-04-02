@@ -17,6 +17,7 @@ ICON_FILE="$RESOURCES_DIR/AppIcon.icns"
 ACTOOL_LOG="$(mktemp -t recon-actool.XXXXXX)"
 APP_VERSION="${RECON_VERSION:-}"
 APP_BUILD_NUMBER="${RECON_BUILD_NUMBER:-${RECON_VERSION:-}}"
+IS_DEVELOPMENT_BUILD="${RECON_DEVELOPMENT_BUILD:-}"
 
 SOURCE_FILES=(${(f)"$(find "$ROOT_DIR/Sources/Recon" -name '*.swift' | sort)"})
 
@@ -37,10 +38,44 @@ fail_actool() {
 
 trap cleanup EXIT
 
+default_version_from_git() {
+  git -C "$ROOT_DIR" tag --list 'v*' --sort=-version:refname |
+    grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' |
+    head -n 1 |
+    sed 's/^v//'
+}
+
+set_plist_bool() {
+  local key="$1"
+  local value="$2"
+
+  if /usr/libexec/PlistBuddy -c "Print :$key" "$APP_INFO_PLIST" >/dev/null 2>&1; then
+    /usr/libexec/PlistBuddy -c "Set :$key $value" "$APP_INFO_PLIST"
+  else
+    /usr/libexec/PlistBuddy -c "Add :$key bool $value" "$APP_INFO_PLIST"
+  fi
+}
+
 rm -rf "$APP_DIR"
 rm -rf "$ICONSET_DIR"
 mkdir -p "$MACOS_DIR" "$RESOURCES_DIR" "$ICONSET_DIR"
 cp "$ROOT_DIR/Info.plist" "$APP_INFO_PLIST"
+
+if [[ -z "$APP_VERSION" ]]; then
+  APP_VERSION="$(default_version_from_git)"
+fi
+
+if [[ -z "$APP_BUILD_NUMBER" && -n "$APP_VERSION" ]]; then
+  APP_BUILD_NUMBER="$APP_VERSION"
+fi
+
+if [[ -z "$IS_DEVELOPMENT_BUILD" ]]; then
+  if [[ -n "${RECON_VERSION:-}" ]]; then
+    IS_DEVELOPMENT_BUILD=false
+  else
+    IS_DEVELOPMENT_BUILD=true
+  fi
+fi
 
 if [[ -n "$APP_VERSION" ]]; then
   /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $APP_VERSION" "$APP_INFO_PLIST"
@@ -49,6 +84,8 @@ fi
 if [[ -n "$APP_BUILD_NUMBER" ]]; then
   /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $APP_BUILD_NUMBER" "$APP_INFO_PLIST"
 fi
+
+set_plist_bool "ReconDevelopmentBuild" "$IS_DEVELOPMENT_BUILD"
 
 if ! xcrun actool --version >"$ACTOOL_LOG" 2>&1; then
   fail_actool "startup check"

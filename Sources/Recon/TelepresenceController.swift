@@ -69,6 +69,8 @@ final class TelepresenceController: ObservableObject {
     @Published private(set) var isLoadingNamespacePickerOptions = false
     @Published private(set) var appUpdateState: AppUpdateState = .idle
     @Published private(set) var connectedSince: Date?
+    @Published private(set) var isAppUpdateSectionDismissed = false
+    @Published private(set) var isShowingManualUpdateFeedback = false
 
     let settingsStore: AppSettingsStore
 
@@ -228,17 +230,29 @@ final class TelepresenceController: ObservableObject {
     }
 
     var appUpdateDetail: String {
+        let currentVersion = Self.currentAppVersion()
+        let shouldShowVersionComparison = isDevelopmentBuild || isShowingManualUpdateFeedback
+
         switch appUpdateState {
         case .idle:
             return "Look for the latest published Recon release."
         case .checking:
             return "Looking for the latest published Recon release."
         case .upToDate(let currentVersion, let latestVersion):
-            if let latestVersion, latestVersion != currentVersion {
-                return "Installed: v\(currentVersion). Latest seen: v\(latestVersion)."
+            if let latestVersion {
+                if shouldShowVersionComparison {
+                    return "Installed: v\(currentVersion). Latest: v\(latestVersion)."
+                }
+
+                if latestVersion != currentVersion {
+                    return "Installed: v\(currentVersion). Latest seen: v\(latestVersion)."
+                }
             }
             return "Installed: v\(currentVersion)."
         case .available(let release):
+            if isDevelopmentBuild {
+                return "Installed: v\(currentVersion). Latest: \(release.displayVersion)."
+            }
             return "\(release.displayVersion) is ready to install."
         case .installing(let release):
             return "Downloading and installing \(release.displayVersion)..."
@@ -251,13 +265,32 @@ final class TelepresenceController: ObservableObject {
 
     var appUpdateActionTitle: String? {
         switch appUpdateState {
-        case .checking, .installing:
-            return nil
         case .available, .installFailed:
             return "Update"
-        default:
-            return "Check"
+        case .idle, .checking, .upToDate, .installing, .checkFailed:
+            return nil
         }
+    }
+
+    var shouldShowUpdateSection: Bool {
+        guard !isAppUpdateSectionDismissed else {
+            return false
+        }
+
+        switch appUpdateState {
+        case .available, .installing, .installFailed:
+            return true
+        case .checking:
+            return isShowingManualUpdateFeedback
+        case .upToDate, .checkFailed:
+            return isDevelopmentBuild || isShowingManualUpdateFeedback
+        case .idle:
+            return false
+        }
+    }
+
+    var isDevelopmentBuild: Bool {
+        Self.isDevelopmentBuild()
     }
 
     var isPerformingUpdateAction: Bool {
@@ -266,6 +299,14 @@ final class TelepresenceController: ObservableObject {
         }
 
         if case .installing = appUpdateState {
+            return true
+        }
+
+        return false
+    }
+
+    var isCheckingForUpdates: Bool {
+        if case .checking = appUpdateState {
             return true
         }
 
@@ -289,6 +330,7 @@ final class TelepresenceController: ObservableObject {
             targetResolver: targetResolver,
             settingsStore: settingsStore
         )
+        isAppUpdateSectionDismissed = settingsStore.appUpdateSectionDismissed
 
         bindSettings()
 
@@ -417,19 +459,29 @@ final class TelepresenceController: ObservableObject {
         }
     }
 
+    func checkForUpdatesManually() {
+        settingsStore.setAppUpdateSectionDismissed(false)
+        isShowingManualUpdateFeedback = true
+
+        Task {
+            await checkForUpdates(force: true)
+        }
+    }
+
     func handleAppUpdateAction() {
         switch appUpdateState {
         case .available(let release), .installFailed(_, let release):
             Task {
                 await installUpdate(release)
             }
-        case .checking, .installing:
+        case .idle, .checking, .upToDate, .installing, .checkFailed:
             return
-        default:
-            Task {
-                await checkForUpdates(force: true)
-            }
         }
+    }
+
+    func dismissAppUpdateSection() {
+        isShowingManualUpdateFeedback = false
+        settingsStore.setAppUpdateSectionDismissed(true)
     }
 
     func setLaunchAtLoginEnabled(_ enabled: Bool) {
@@ -681,6 +733,13 @@ final class TelepresenceController: ObservableObject {
             .dropFirst()
             .sink { [weak self] _ in
                 self?.restartPolling()
+            }
+            .store(in: &cancellables)
+
+        settingsStore.$appUpdateSectionDismissed
+            .removeDuplicates()
+            .sink { [weak self] dismissed in
+                self?.isAppUpdateSectionDismissed = dismissed
             }
             .store(in: &cancellables)
     }
@@ -1313,5 +1372,9 @@ final class TelepresenceController: ObservableObject {
         }
 
         return "0.0.0"
+    }
+
+    private static func isDevelopmentBuild(bundle: Bundle = .main) -> Bool {
+        (bundle.object(forInfoDictionaryKey: "ReconDevelopmentBuild") as? Bool) ?? false
     }
 }

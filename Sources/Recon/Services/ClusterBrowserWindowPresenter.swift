@@ -1,25 +1,19 @@
 import AppKit
 import SwiftUI
 
-enum AppWindowID {
-    static let preferences = "preferences"
-    static let diagnostics = "diagnostics"
-    static let cluster = "cluster"
-}
-
 @MainActor
-enum PreferencesWindowPresenter {
+enum ClusterBrowserWindowPresenter {
     static func present(using openWindow: OpenWindowAction) {
-        if let window = preferencesWindow {
+        if let window = clusterWindow {
             bringToFront(window)
             return
         }
 
-        openWindow(id: AppWindowID.preferences)
+        openWindow(id: AppWindowID.cluster)
 
         Task { @MainActor in
             for _ in 0..<10 {
-                if let window = preferencesWindow {
+                if let window = clusterWindow {
                     bringToFront(window)
                     return
                 }
@@ -30,14 +24,14 @@ enum PreferencesWindowPresenter {
     }
 
     static func configure(_ window: NSWindow) {
-        window.identifier = NSUserInterfaceItemIdentifier(AppWindowID.preferences)
+        window.identifier = NSUserInterfaceItemIdentifier(AppWindowID.cluster)
         window.collectionBehavior.insert(.fullScreenAuxiliary)
         window.collectionBehavior.insert(.moveToActiveSpace)
     }
 
-    private static var preferencesWindow: NSWindow? {
+    private static var clusterWindow: NSWindow? {
         NSApp.windows.first { window in
-            window.identifier?.rawValue == AppWindowID.preferences
+            window.identifier?.rawValue == AppWindowID.cluster
         }
     }
 

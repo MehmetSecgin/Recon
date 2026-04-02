@@ -27,6 +27,7 @@ final class AppSettingsStore: ObservableObject {
         static let notifyConnectionDropped = "Recon.Notify.ConnectionDropped"
         static let notifyAutoReconnectFailed = "Recon.Notify.AutoReconnectFailed"
         static let notifyAutoConnectFailed = "Recon.Notify.AutoConnectFailed"
+        static let appUpdateSectionDismissed = "Recon.AppUpdateSectionDismissed"
     }
 
     @Published private(set) var launchAtLoginEnabled: Bool
@@ -41,6 +42,7 @@ final class AppSettingsStore: ObservableObject {
     @Published private(set) var namespaceOverridesByContext: [String: String]
     @Published private(set) var recentNamespacesByContext: [String: [String]]
     @Published private(set) var notificationToggles: [AppNotificationEvent: Bool]
+    @Published private(set) var appUpdateSectionDismissed: Bool
 
     private let defaults: UserDefaults
 
@@ -71,6 +73,7 @@ final class AppSettingsStore: ObservableObject {
         namespaceOverridesByContext = Self.normalize(namespaceOverrides: defaults.dictionary(forKey: DefaultsKey.namespaceOverridesByContext) as? [String: String] ?? [:])
         recentNamespacesByContext = Self.normalize(recentNamespacesByContext: defaults.dictionary(forKey: DefaultsKey.recentNamespacesByContext) as? [String: [String]] ?? [:])
         notificationToggles = Self.loadNotificationToggles(from: defaults)
+        appUpdateSectionDismissed = defaults.object(forKey: DefaultsKey.appUpdateSectionDismissed) as? Bool ?? false
 
         persistCanonicalState()
     }
@@ -218,6 +221,12 @@ final class AppSettingsStore: ObservableObject {
         defaults.set(recentNamespacesByContext, forKey: DefaultsKey.recentNamespacesByContext)
     }
 
+    func setAppUpdateSectionDismissed(_ dismissed: Bool) {
+        guard appUpdateSectionDismissed != dismissed else { return }
+        appUpdateSectionDismissed = dismissed
+        defaults.set(dismissed, forKey: DefaultsKey.appUpdateSectionDismissed)
+    }
+
     func makeEnvironmentSnapshot() -> EnvironmentSettingsSnapshot {
         EnvironmentSettingsSnapshot(
             kubeconfigPreferenceMode: kubeconfigPreferenceMode,
@@ -233,6 +242,7 @@ final class AppSettingsStore: ObservableObject {
         defaults.set(rememberedKubeconfigPaths, forKey: DefaultsKey.rememberedKubeconfigPaths)
         defaults.set(namespaceOverridesByContext, forKey: DefaultsKey.namespaceOverridesByContext)
         defaults.set(recentNamespacesByContext, forKey: DefaultsKey.recentNamespacesByContext)
+        defaults.set(appUpdateSectionDismissed, forKey: DefaultsKey.appUpdateSectionDismissed)
         persist(path: telepresencePathOverride, key: DefaultsKey.telepresencePathOverride)
         persist(path: kubectlPathOverride, key: DefaultsKey.kubectlPathOverride)
         persist(path: selectedKubeconfigPath, key: DefaultsKey.selectedKubeconfigPath)

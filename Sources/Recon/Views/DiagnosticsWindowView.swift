@@ -1,6 +1,18 @@
 import AppKit
 import SwiftUI
 
+struct DiagnosticsWindowSceneView: View {
+    @StateObject private var viewModel: DiagnosticsViewModel
+
+    init(controller: TelepresenceController) {
+        _viewModel = StateObject(wrappedValue: DiagnosticsViewModel(controller: controller))
+    }
+
+    var body: some View {
+        DiagnosticsWindowView(viewModel: viewModel)
+    }
+}
+
 struct DiagnosticsWindowView: View {
     @ObservedObject var viewModel: DiagnosticsViewModel
 
@@ -162,14 +174,14 @@ struct DiagnosticsWindowView: View {
                         .pickerStyle(.menu)
                         .frame(width: 180, alignment: .leading)
 
-                        TextField(
-                            "Filter logs",
+                        KeyboardFilterField(
+                            prompt: "Filter logs",
                             text: Binding(
                                 get: { viewModel.filterText },
                                 set: { viewModel.filterText = $0 }
                             )
                         )
-                        .textFieldStyle(.roundedBorder)
+                        .frame(minWidth: 220)
 
                         Spacer(minLength: 0)
                     }
@@ -509,7 +521,7 @@ private struct DiagnosticsLogLine: View {
                     .foregroundStyle(levelColor)
             }
 
-            Text(entry.messageText)
+            Text(entry.text)
                 .font(.system(size: 11, weight: .regular, design: .monospaced))
                 .foregroundStyle(Color.white.opacity(0.9))
                 .textSelection(.enabled)

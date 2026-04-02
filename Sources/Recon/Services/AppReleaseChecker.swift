@@ -35,7 +35,16 @@ struct AppReleaseChecker {
     private let assetName: String
     private let userAgent: String
 
-    init(bundle: Bundle = .main, session: URLSession = .shared) {
+    // Release checks are intentionally stateless and should not create persistent HTTP storage on disk.
+    private static let defaultSession: URLSession = {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.urlCache = nil
+        configuration.httpCookieStorage = nil
+        configuration.urlCredentialStorage = nil
+        return URLSession(configuration: configuration)
+    }()
+
+    init(bundle: Bundle = .main, session: URLSession = AppReleaseChecker.defaultSession) {
         self.session = session
         repository = (bundle.object(forInfoDictionaryKey: "ReconGitHubRepository") as? String)?
             .trimmingCharacters(in: .whitespacesAndNewlines)

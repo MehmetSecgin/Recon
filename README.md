@@ -68,6 +68,14 @@ Build:
 ./build.sh
 ```
 
+For plain local development builds, `build.sh` stamps the app with the latest local Git tag and marks the bundle as a development build. That keeps the in-app update UI useful during local testing by showing both the installed version and the latest published version when appropriate.
+
+If the local build version looks older than the latest GitHub release, refresh your local tags before building:
+
+```bash
+git fetch --tags --prune origin
+```
+
 Run:
 
 ```bash
@@ -113,6 +121,7 @@ If you are using the included GitHub Actions workflow, this upload happens autom
 - It resolves `KUBECONFIG` and `PATH` from the user environment so Finder-launched app sessions behave like a normal shell session
 - Switching kubeconfig files triggers a full Telepresence reconnect
 - It polls Telepresence status automatically every 60 seconds by default and also refreshes when you open the menu
+- It checks GitHub for new Recon releases on launch and periodically afterward using a stateless request path that does not persist HTTP cache or cookies
 - Preferences let users change the polling interval, switch to manual refresh only, enable launch at login, and opt into auto-reconnect
 - The app is a menu bar utility, not a full Kubernetes dashboard
 

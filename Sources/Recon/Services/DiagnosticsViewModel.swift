@@ -50,10 +50,11 @@ final class DiagnosticsViewModel: ObservableObject {
     private let controller: TelepresenceController
     private let historyStore: EventHistoryStore
     private let logService: DiagnosticsLogService
-    private var eventSubscriptionTask: Task<Void, Never>?
     private var logPollingTask: Task<Void, Never>?
     private var isWindowActive = false
     private var lastBackfillAt: Date?
+
+    private static let defaultIncludedLogLevels: Set<DiagnosticsLogLevel> = [.info, .warn, .error]
 
     convenience init(controller: TelepresenceController) {
         self.init(
@@ -71,19 +72,9 @@ final class DiagnosticsViewModel: ObservableObject {
         self.controller = controller
         self.historyStore = historyStore
         self.logService = logService
-
-        eventSubscriptionTask = Task { [weak self] in
-            guard let self else { return }
-            await self.prepareHistoryStore()
-            let stream = self.controller.diagnosticsEventStream()
-            for await event in stream {
-                await self.persist(event: event)
-            }
-        }
     }
 
     deinit {
-        eventSubscriptionTask?.cancel()
         logPollingTask?.cancel()
     }
 
@@ -91,7 +82,7 @@ final class DiagnosticsViewModel: ObservableObject {
         logEntries.filter { entry in
             let levelIncluded = entry.level == .unknown || includedLogLevels.contains(entry.level)
             let matchesFilter = filterText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
-                entry.rawLine.localizedCaseInsensitiveContains(filterText)
+                entryMatchesFilter(entry)
             return levelIncluded && matchesFilter
         }
     }
@@ -111,29 +102,42 @@ final class DiagnosticsViewModel: ObservableObject {
 
         Task { [weak self] in
             guard let self else { return }
-            await self.refreshAll()
-            await self.startLogPolling()
+            await self.refreshSelectedTab(forceReload: true)
         }
     }
 
     func deactivateWindow() {
         isWindowActive = false
-        logPollingTask?.cancel()
-        logPollingTask = nil
+        stopLogPolling()
+        Task {
+            await logService.reset()
+        }
+        clearRetainedState()
     }
 
     func selectTab(_ tab: Tab) {
+        guard selectedTab != tab else { return }
         selectedTab = tab
-        if tab == .logs, isWindowActive {
-            Task { [weak self] in
-                await self?.reloadLogs(reset: true)
-            }
+        guard isWindowActive else { return }
+
+        Task { [weak self] in
+            await self?.refreshSelectedTab(forceReload: true)
+        }
+    }
+
+    func refreshSelectedTab() {
+        guard isWindowActive else { return }
+
+        Task { [weak self] in
+            await self?.refreshSelectedTab(forceReload: true)
         }
     }
 
     func selectLogSource(_ source: DiagnosticsLogSource?) {
         guard selectedLogSource != source else { return }
         selectedLogSource = source
+        guard isWindowActive, selectedTab == .logs else { return }
+
         Task { [weak self] in
             await self?.reloadLogs(reset: true)
         }
@@ -149,13 +153,6 @@ final class DiagnosticsViewModel: ObservableObject {
         }
     }
 
-    func refreshAll() async {
-        await refreshHealth()
-        await backfillHistoryFromLogs()
-        await refreshHistory()
-        await reloadLogs(reset: true)
-    }
-
     func refreshHealth() async {
         isLoadingHealth = true
         let snapshot = await controller.fetchDiagnosticsHealthSnapshot()
@@ -167,6 +164,7 @@ final class DiagnosticsViewModel: ObservableObject {
     func refreshHistory() async {
         isLoadingHistory = true
         do {
+            try await historyStore.prepare()
             historyItems = try await historyStore.recentHistory()
             historyErrorMessage = nil
         } catch {
@@ -188,8 +186,8 @@ final class DiagnosticsViewModel: ObservableObject {
             logEntries = snapshot.entries
         } else if !snapshot.entries.isEmpty {
             logEntries.append(contentsOf: snapshot.entries)
-            if logEntries.count > 1500 {
-                logEntries = Array(logEntries.suffix(1500))
+            if logEntries.count > DiagnosticsLogService.retainedEntryLimit {
+                logEntries = Array(logEntries.suffix(DiagnosticsLogService.retainedEntryLimit))
             }
         }
     }
@@ -320,29 +318,16 @@ final class DiagnosticsViewModel: ObservableObject {
         ]
     }
 
-    private func prepareHistoryStore() async {
-        do {
-            try await historyStore.prepare()
-            historyItems = try await historyStore.recentHistory()
-            historyErrorMessage = nil
-        } catch {
-            historyErrorMessage = error.localizedDescription
-        }
-    }
-
-    private func persist(event: DiagnosticsEvent) async {
-        do {
-            try await historyStore.insert(event)
-            historyItems = try await historyStore.recentHistory()
-            historyErrorMessage = nil
-        } catch {
-            historyErrorMessage = error.localizedDescription
-        }
-    }
-
     private func backfillHistoryFromLogs() async {
         if let lastBackfillAt,
            Date.now.timeIntervalSince(lastBackfillAt) < 5 * 60 {
+            return
+        }
+
+        do {
+            try await historyStore.prepare()
+        } catch {
+            historyErrorMessage = error.localizedDescription
             return
         }
 
@@ -359,15 +344,70 @@ final class DiagnosticsViewModel: ObservableObject {
     }
 
     private func startLogPolling() async {
-        logPollingTask?.cancel()
+        stopLogPolling()
         logPollingTask = Task { [weak self] in
             guard let self else { return }
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(1))
-                guard !Task.isCancelled, self.isWindowActive else { return }
+                guard !Task.isCancelled, self.isWindowActive, self.selectedTab == .logs else { return }
                 await self.reloadLogs(reset: false)
             }
         }
+    }
+
+    private func stopLogPolling() {
+        logPollingTask?.cancel()
+        logPollingTask = nil
+    }
+
+    private func refreshSelectedTab(forceReload: Bool) async {
+        switch selectedTab {
+        case .health:
+            stopLogPolling()
+            await refreshHealth()
+        case .logs:
+            await reloadLogs(reset: forceReload)
+            await startLogPolling()
+        case .history:
+            stopLogPolling()
+            await backfillHistoryFromLogs()
+            await refreshHistory()
+        }
+    }
+
+    private func clearRetainedState() {
+        selectedTab = .health
+        selectedLogSource = nil
+        filterText = ""
+        includedLogLevels = Self.defaultIncludedLogLevels
+        healthSnapshot = nil
+        healthErrorMessage = nil
+        sourceStates = []
+        logEntries = []
+        logsDirectoryExists = false
+        historyItems = []
+        historyErrorMessage = nil
+        exportStatusMessage = nil
+        isLoadingHealth = false
+        isLoadingHistory = false
+        isExportingBundle = false
+        lastBackfillAt = nil
+    }
+
+    private func entryMatchesFilter(_ entry: DiagnosticsLogEntry) -> Bool {
+        let query = filterText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { return true }
+
+        if entry.text.localizedCaseInsensitiveContains(query) {
+            return true
+        }
+
+        if let timestampText = entry.timestampText,
+           timestampText.localizedCaseInsensitiveContains(query) {
+            return true
+        }
+
+        return entry.level.rawValue.localizedCaseInsensitiveContains(query)
     }
 
     private static let connectedSinceFormatter: DateFormatter = {

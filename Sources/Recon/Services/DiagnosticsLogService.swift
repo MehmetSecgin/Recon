@@ -20,6 +20,8 @@ actor DiagnosticsLogService {
         static let chunkSize = 64 * 1024
     }
 
+    static let retainedEntryLimit = 500
+
     private struct ReaderState: Sendable {
         let fileURL: URL
         let fileIdentifier: String?
@@ -118,6 +120,10 @@ actor DiagnosticsLogService {
         return DiagnosticsBackfillResult(events: events)
     }
 
+    func reset() {
+        readerStates.removeAll()
+    }
+
     private func existingLogURL(for source: DiagnosticsLogSource) -> URL? {
         let url = logLocator.logURL(for: source)
         return fileManager.fileExists(atPath: url.path) ? url : nil
@@ -125,22 +131,15 @@ actor DiagnosticsLogService {
 
     private func loadInitialEntries(for source: DiagnosticsLogSource) -> [DiagnosticsLogEntry] {
         let fileURL = logLocator.logURL(for: source)
-        guard fileManager.fileExists(atPath: fileURL.path),
-              let content = try? String(contentsOf: fileURL, encoding: .utf8) else {
+        guard fileManager.fileExists(atPath: fileURL.path) else {
             readerStates[source] = nil
             return []
         }
 
-        let lines = content.components(separatedBy: .newlines).filter { !$0.isEmpty }
-        let entries = lines.suffix(1000).map(parseLogEntry(from:))
+        let lines = tailLines(in: fileURL, maxLines: Self.retainedEntryLimit)
+        let entries = lines.map(parseLogEntry(from:))
         let identifier = fileIdentifier(for: fileURL)
-        let offset: UInt64
-        if let handle = try? FileHandle(forReadingFrom: fileURL) {
-            defer { try? handle.close() }
-            offset = (try? handle.seekToEnd()) ?? UInt64(content.utf8.count)
-        } else {
-            offset = UInt64(content.utf8.count)
-        }
+        let offset = (try? fileURL.resourceValues(forKeys: [.fileSizeKey]).fileSize).map(UInt64.init) ?? 0
         readerStates[source] = ReaderState(fileURL: fileURL, fileIdentifier: identifier, offset: offset)
         return entries
     }
@@ -313,12 +312,12 @@ actor DiagnosticsLogService {
     private func parseLogEntry(from line: String) -> DiagnosticsLogEntry {
         let pattern = #"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d+)\s+([A-Za-z]+)\s+(.*)$"#
         guard let regex = try? NSRegularExpression(pattern: pattern) else {
-            return DiagnosticsLogEntry(rawLine: line, timestampText: nil, level: .unknown, messageText: line)
+            return DiagnosticsLogEntry(text: line, timestampText: nil, level: .unknown)
         }
 
         let range = NSRange(location: 0, length: (line as NSString).length)
         guard let match = regex.firstMatch(in: line, range: range), match.numberOfRanges == 4 else {
-            return DiagnosticsLogEntry(rawLine: line, timestampText: nil, level: .unknown, messageText: line)
+            return DiagnosticsLogEntry(text: line, timestampText: nil, level: .unknown)
         }
 
         let nsLine = line as NSString
@@ -339,10 +338,9 @@ actor DiagnosticsLogService {
         }
 
         return DiagnosticsLogEntry(
-            rawLine: line,
+            text: messageText,
             timestampText: timestampText,
-            level: level,
-            messageText: messageText
+            level: level
         )
     }
 

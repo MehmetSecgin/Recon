@@ -61,8 +61,10 @@ struct ReconMenuView: View {
             preferencesSection
                 .padding(.top, 20)
 
-            updateSection
-                .padding(.top, 14)
+            if controller.shouldShowUpdateSection {
+                updateSection
+                    .padding(.top, 14)
+            }
 
             footerSection
                 .padding(.top, 16)
@@ -266,7 +268,8 @@ struct ReconMenuView: View {
             detail: controller.appUpdateDetail,
             actionTitle: controller.appUpdateActionTitle,
             isChecking: controller.isPerformingUpdateAction,
-            action: controller.handleAppUpdateAction
+            action: controller.handleAppUpdateAction,
+            onDismiss: controller.dismissAppUpdateSection
         )
     }
 
@@ -274,7 +277,7 @@ struct ReconMenuView: View {
         VStack(alignment: .leading, spacing: 0) {
             SectionDivider()
 
-            HStack(alignment: .center, spacing: 12) {
+            HStack(alignment: .center, spacing: 8) {
                 Text("Recon \(appVersionText)")
                     .font(.system(size: 10, weight: .regular, design: .monospaced))
                     .foregroundStyle(.tertiary)
@@ -283,17 +286,44 @@ struct ReconMenuView: View {
 
                 Spacer(minLength: 8)
 
+                Button {
+                    controller.checkForUpdatesManually()
+                } label: {
+                    if controller.isCheckingForUpdates {
+                        ProgressView()
+                            .controlSize(.small)
+                    } else {
+                        Image(systemName: "arrow.trianglehead.2.clockwise.rotate.90")
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .buttonStyle(.plain)
+                .disabled(controller.isPerformingUpdateAction)
+                .help("Check for updates")
+            }
+            .padding(.top, 12)
+
+            HStack(alignment: .center, spacing: 8) {
+                FooterSecondaryButton("Cluster Browser", width: 124) {
+                    Task { @MainActor in
+                        ClusterBrowserWindowPresenter.present(using: openWindow)
+                    }
+                }
+
                 FooterSecondaryButton("Diagnostics") {
                     Task { @MainActor in
                         DiagnosticsWindowPresenter.present(using: openWindow)
                     }
                 }
 
+                Spacer(minLength: 8)
+
                 FooterQuitButton {
                     NSApplication.shared.terminate(nil)
                 }
             }
-            .padding(.top, 12)
+            .padding(.top, 10)
             .padding(.bottom, 4)
         }
     }
@@ -544,23 +574,25 @@ private struct FooterQuitButton: View {
     var body: some View {
         Button("Quit", action: action)
             .buttonStyle(MenuActionButtonStyle(variant: .danger))
-            .frame(width: 88)
+            .frame(width: 78)
     }
 }
 
 private struct FooterSecondaryButton: View {
     let title: String
     let action: () -> Void
+    let width: CGFloat
 
-    init(_ title: String, action: @escaping () -> Void) {
+    init(_ title: String, width: CGFloat = 92, action: @escaping () -> Void) {
         self.title = title
         self.action = action
+        self.width = width
     }
 
     var body: some View {
         Button(title, action: action)
             .buttonStyle(MenuActionButtonStyle(variant: .secondary))
-            .frame(width: 100)
+            .frame(width: width)
     }
 }
 
@@ -570,52 +602,61 @@ private struct UpdateMenuItem: View {
     let actionTitle: String?
     let isChecking: Bool
     let action: () -> Void
+    let onDismiss: () -> Void
 
     @State private var isHovering = false
 
     var body: some View {
-        Button(action: action) {
-            HStack(spacing: 10) {
-                Image(systemName: iconName)
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(iconColor)
-                    .frame(width: 14)
+        HStack(spacing: 10) {
+            Image(systemName: iconName)
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(iconColor)
+                .frame(width: 14)
 
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(title)
-                        .font(.system(size: 12, weight: .regular))
-                        .foregroundStyle(Color(nsColor: .labelColor))
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.system(size: 12, weight: .regular))
+                    .foregroundStyle(Color(nsColor: .labelColor))
 
-                    Text(detail)
-                        .font(.system(size: 11, weight: .regular))
-                        .foregroundStyle(Color(nsColor: .tertiaryLabelColor))
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-
-                Spacer(minLength: 8)
-
-                if isChecking {
-                    ProgressView()
-                        .controlSize(.small)
-                } else if let actionTitle {
-                    Text(actionTitle)
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(Color.accentColor)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 4)
-                        .background(Color.accentColor.opacity(0.12), in: Capsule())
-                }
+                Text(detail)
+                    .font(.system(size: 11, weight: .regular))
+                    .foregroundStyle(Color(nsColor: .tertiaryLabelColor))
+                    .fixedSize(horizontal: false, vertical: true)
             }
-            .padding(.vertical, 8)
-            .padding(.horizontal, 10)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .fill(isHovering ? Color.white.opacity(0.06) : Color.clear)
-            )
+
+            Spacer(minLength: 8)
+
+            if isChecking {
+                ProgressView()
+                    .controlSize(.small)
+            } else if let actionTitle {
+                Button(actionTitle, action: action)
+                    .buttonStyle(.plain)
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(Color.accentColor)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(Color.accentColor.opacity(0.12), in: Capsule())
+                    .help("Install update")
+            }
+
+            Button(action: onDismiss) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(Color(nsColor: .tertiaryLabelColor))
+                    .frame(width: 18, height: 18)
+                    .background(Color.white.opacity(isHovering ? 0.08 : 0.04), in: Circle())
+            }
+            .buttonStyle(.plain)
+            .help("Dismiss until you check again")
         }
-        .buttonStyle(.plain)
-        .disabled(isChecking)
+        .padding(.vertical, 8)
+        .padding(.horizontal, 10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .fill(isHovering ? Color.white.opacity(0.06) : Color.clear)
+        )
         .onHover { isHovering = $0 }
     }
 
