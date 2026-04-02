@@ -6,11 +6,16 @@ struct ReconApp: App {
     @StateObject private var settingsStore: AppSettingsStore
     @StateObject private var controller: TelepresenceController
     private let diagnosticsEventRecorder: DiagnosticsEventRecorder
+    private let browserConfigService: BrowserConfigService
 
     init() {
         let settingsStore = AppSettingsStore()
         let environmentResolver = CommandEnvironmentResolver()
         let controller = TelepresenceController(
+            settingsStore: settingsStore,
+            environmentResolver: environmentResolver
+        )
+        browserConfigService = BrowserConfigService(
             settingsStore: settingsStore,
             environmentResolver: environmentResolver
         )
@@ -34,7 +39,11 @@ struct ReconApp: App {
         }
 
         Window("Recon — Preferences", id: AppWindowID.preferences) {
-            PreferencesWindowView(controller: controller, settingsStore: settingsStore)
+            PreferencesWindowView(
+                controller: controller,
+                settingsStore: settingsStore,
+                browserConfigService: browserConfigService
+            )
         }
         .defaultSize(width: 500, height: 400)
         .windowResizability(.contentSize)
@@ -46,7 +55,10 @@ struct ReconApp: App {
         .windowResizability(.contentSize)
 
         Window("Recon — Cluster", id: AppWindowID.cluster) {
-            ClusterBrowserWindowSceneView(settingsStore: settingsStore)
+            ClusterBrowserWindowSceneView(
+                settingsStore: settingsStore,
+                browserConfigService: browserConfigService
+            )
         }
         .defaultSize(width: 960, height: 700)
         .windowResizability(.contentMinSize)

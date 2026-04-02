@@ -100,16 +100,11 @@ actor KubeResourceService {
         let spec: Spec?
     }
 
-    private let environmentResolver: CommandEnvironmentResolver
+    private let browserConfigService: BrowserConfigService
     private let decoder: JSONDecoder
-    private let kubectlFallbackPaths = [
-        "/usr/local/bin/kubectl",
-        "/opt/homebrew/bin/kubectl",
-        "/usr/bin/kubectl"
-    ]
 
-    init(environmentResolver: CommandEnvironmentResolver) {
-        self.environmentResolver = environmentResolver
+    init(browserConfigService: BrowserConfigService) {
+        self.browserConfigService = browserConfigService
 
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .custom { decoder in
@@ -128,27 +123,27 @@ actor KubeResourceService {
         self.decoder = decoder
     }
 
-    func fetchPods(namespace: String) async throws -> [PodResource] {
-        let items: [PodListItem] = try await fetchItems(resource: "pods", namespace: namespace)
+    func fetchPods(target: BrowserTarget) async throws -> [PodResource] {
+        let items: [PodListItem] = try await fetchItems(resource: "pods", target: target)
 
-        return mapPods(items, namespace: namespace)
+        return mapPods(items, namespace: target.namespace)
     }
 
-    func fetchDeployments(namespace: String) async throws -> [DeploymentResource] {
-        let items: [DeploymentListItem] = try await fetchItems(resource: "deployments", namespace: namespace)
+    func fetchDeployments(target: BrowserTarget) async throws -> [DeploymentResource] {
+        let items: [DeploymentListItem] = try await fetchItems(resource: "deployments", target: target)
 
-        return mapDeployments(items, namespace: namespace)
+        return mapDeployments(items, namespace: target.namespace)
     }
 
-    func fetchServices(namespace: String) async throws -> [ServiceResource] {
-        let items: [ServiceListItem] = try await fetchItems(resource: "services", namespace: namespace)
+    func fetchServices(target: BrowserTarget) async throws -> [ServiceResource] {
+        let items: [ServiceListItem] = try await fetchItems(resource: "services", target: target)
 
-        return mapServices(items, namespace: namespace)
+        return mapServices(items, namespace: target.namespace)
     }
 
-    func fetchConfigMaps(namespace: String) async throws -> [ConfigMapResource] {
-        let data = try await fetchJSON(resource: "configmaps", namespace: namespace)
-        return try ConfigMapResourceDecoder.decode(from: data, defaultNamespace: namespace)
+    func fetchConfigMaps(target: BrowserTarget) async throws -> [ConfigMapResource] {
+        let data = try await fetchJSON(resource: "configmaps", target: target)
+        return try ConfigMapResourceDecoder.decode(from: data, defaultNamespace: target.namespace)
     }
 
     func decodeConfigMaps(from data: Data, namespace: String) throws -> [ConfigMapResource] {
@@ -218,8 +213,8 @@ actor KubeResourceService {
         }
     }
 
-    private func fetchItems<Item: Decodable>(resource: String, namespace: String) async throws -> [Item] {
-        let data = try await fetchJSON(resource: resource, namespace: namespace)
+    private func fetchItems<Item: Decodable>(resource: String, target: BrowserTarget) async throws -> [Item] {
+        let data = try await fetchJSON(resource: resource, target: target)
         do {
             return try decoder.decode(ResourceListResponse<Item>.self, from: data).items
         } catch {
@@ -227,22 +222,11 @@ actor KubeResourceService {
         }
     }
 
-    private func fetchJSON(resource: String, namespace: String) async throws -> Data {
-        let kubectl = await environmentResolver.resolveExecutable(
-            named: "kubectl",
-            envKey: "KUBECTL_PATH",
-            wellKnownPaths: kubectlFallbackPaths
-        )
-
-        guard let kubectl else {
-            throw KubeResourceReadError.kubectlNotFound
-        }
-
+    private func fetchJSON(resource: String, target: BrowserTarget) async throws -> Data {
         do {
-            let result = try await ProcessRunner.run(
-                executable: kubectl,
-                arguments: ["get", resource, "-n", namespace, "-o", "json"],
-                environment: await environmentResolver.executionEnvironment(),
+            let result = try await browserConfigService.executeBrowserKubectl(
+                for: target.context,
+                command: ["get", resource, "-n", target.namespace, "-o", "json"],
                 timeout: .seconds(5)
             )
 
@@ -253,6 +237,15 @@ actor KubeResourceService {
             }
 
             return Data(result.stdout.utf8)
+        } catch let error as BrowserConfigError {
+            switch error {
+            case .kubectlNotFound:
+                throw KubeResourceReadError.kubectlNotFound
+            case .timedOut:
+                throw KubeResourceReadError.timedOut
+            case .commandFailed(let message):
+                throw KubeResourceReadError.commandFailed(message)
+            }
         } catch is ProcessRunner.TimeoutError {
             throw KubeResourceReadError.timedOut
         } catch let error as KubeResourceReadError {
@@ -270,5 +263,4 @@ actor KubeResourceService {
 
         return firstLine ?? fallback
     }
-
 }

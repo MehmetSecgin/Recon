@@ -15,6 +15,12 @@ final class AppSettingsStore: ObservableObject {
         static let rememberedKubeconfigPaths = "Recon.RememberedKubeconfigPaths"
         static let namespaceOverridesByContext = "Recon.NamespaceOverridesByContext"
         static let recentNamespacesByContext = "Recon.RecentNamespacesByContext"
+        static let browserKubeconfigPaths = "Recon.BrowserKubeconfigPaths"
+        static let browserHasExplicitKubeconfigSources = "Recon.BrowserHasExplicitKubeconfigSources"
+        static let browserLastSelectedContextID = "Recon.BrowserLastSelectedContextID"
+        static let browserSelectedNamespacesByContextID = "Recon.BrowserSelectedNamespacesByContextID"
+        static let browserRecentNamespacesByContextID = "Recon.BrowserRecentNamespacesByContextID"
+        static let browserHiddenNamespacesByContextID = "Recon.BrowserHiddenNamespacesByContextID"
         static let hasExplicitKubeconfigSelection = "Recon.HasExplicitKubeconfigSelection"
         static let pollingIntervalSeconds = "Recon.PollingIntervalSeconds"
         static let autoReconnectEnabled = "Recon.AutoReconnectEnabled"
@@ -41,10 +47,16 @@ final class AppSettingsStore: ObservableObject {
     @Published private(set) var rememberedKubeconfigPaths: [String]
     @Published private(set) var namespaceOverridesByContext: [String: String]
     @Published private(set) var recentNamespacesByContext: [String: [String]]
+    @Published private(set) var browserKubeconfigPaths: [String]
+    @Published private(set) var browserLastSelectedContextID: String?
+    @Published private(set) var browserSelectedNamespacesByContextID: [String: String]
+    @Published private(set) var browserRecentNamespacesByContextID: [String: [String]]
+    @Published private(set) var browserHiddenNamespacesByContextID: [String: [String]]
     @Published private(set) var notificationToggles: [AppNotificationEvent: Bool]
     @Published private(set) var appUpdateSectionDismissed: Bool
 
     private let defaults: UserDefaults
+    private var browserHasExplicitKubeconfigSources: Bool
 
     init(
         defaults: UserDefaults = .standard,
@@ -72,6 +84,12 @@ final class AppSettingsStore: ObservableObject {
         rememberedKubeconfigPaths = Self.normalize(paths: defaults.stringArray(forKey: DefaultsKey.rememberedKubeconfigPaths) ?? [])
         namespaceOverridesByContext = Self.normalize(namespaceOverrides: defaults.dictionary(forKey: DefaultsKey.namespaceOverridesByContext) as? [String: String] ?? [:])
         recentNamespacesByContext = Self.normalize(recentNamespacesByContext: defaults.dictionary(forKey: DefaultsKey.recentNamespacesByContext) as? [String: [String]] ?? [:])
+        browserKubeconfigPaths = Self.normalize(paths: defaults.stringArray(forKey: DefaultsKey.browserKubeconfigPaths) ?? [])
+        browserHasExplicitKubeconfigSources = defaults.object(forKey: DefaultsKey.browserHasExplicitKubeconfigSources) as? Bool ?? false
+        browserLastSelectedContextID = Self.normalize(contextKey: defaults.string(forKey: DefaultsKey.browserLastSelectedContextID))
+        browserSelectedNamespacesByContextID = Self.normalize(namespaceOverrides: defaults.dictionary(forKey: DefaultsKey.browserSelectedNamespacesByContextID) as? [String: String] ?? [:])
+        browserRecentNamespacesByContextID = Self.normalize(recentNamespacesByContext: defaults.dictionary(forKey: DefaultsKey.browserRecentNamespacesByContextID) as? [String: [String]] ?? [:])
+        browserHiddenNamespacesByContextID = Self.normalize(recentNamespacesByContext: defaults.dictionary(forKey: DefaultsKey.browserHiddenNamespacesByContextID) as? [String: [String]] ?? [:])
         notificationToggles = Self.loadNotificationToggles(from: defaults)
         appUpdateSectionDismissed = defaults.object(forKey: DefaultsKey.appUpdateSectionDismissed) as? Bool ?? false
 
@@ -167,6 +185,144 @@ final class AppSettingsStore: ObservableObject {
         defaults.set(normalizedPaths, forKey: DefaultsKey.rememberedKubeconfigPaths)
     }
 
+    var hasExplicitBrowserKubeconfigSources: Bool {
+        browserHasExplicitKubeconfigSources
+    }
+
+    func bootstrapBrowserKubeconfigPaths(_ paths: [String]) {
+        guard browserHasExplicitKubeconfigSources == false else { return }
+
+        let normalizedPaths = Self.normalize(paths: paths)
+        guard browserKubeconfigPaths != normalizedPaths else { return }
+
+        browserKubeconfigPaths = normalizedPaths
+        defaults.set(normalizedPaths, forKey: DefaultsKey.browserKubeconfigPaths)
+        defaults.set(false, forKey: DefaultsKey.browserHasExplicitKubeconfigSources)
+    }
+
+    func setBrowserKubeconfigPaths(_ paths: [String], isExplicit: Bool = true) {
+        let normalizedPaths = Self.normalize(paths: paths)
+        guard browserKubeconfigPaths != normalizedPaths || browserHasExplicitKubeconfigSources != isExplicit else {
+            return
+        }
+
+        browserKubeconfigPaths = normalizedPaths
+        browserHasExplicitKubeconfigSources = isExplicit
+        defaults.set(normalizedPaths, forKey: DefaultsKey.browserKubeconfigPaths)
+        defaults.set(isExplicit, forKey: DefaultsKey.browserHasExplicitKubeconfigSources)
+    }
+
+    func setBrowserLastSelectedContextID(_ contextID: String?) {
+        let normalizedContextID = Self.normalize(contextKey: contextID)
+        guard browserLastSelectedContextID != normalizedContextID else { return }
+        browserLastSelectedContextID = normalizedContextID
+
+        if let normalizedContextID {
+            defaults.set(normalizedContextID, forKey: DefaultsKey.browserLastSelectedContextID)
+        } else {
+            defaults.removeObject(forKey: DefaultsKey.browserLastSelectedContextID)
+        }
+    }
+
+    func browserSelectedNamespace(for contextID: String) -> String? {
+        guard let normalizedContextID = Self.normalize(contextKey: contextID) else {
+            return nil
+        }
+
+        return browserSelectedNamespacesByContextID[normalizedContextID]
+    }
+
+    func setBrowserSelectedNamespace(_ namespace: String, for contextID: String) {
+        guard let normalizedContextID = Self.normalize(contextKey: contextID),
+              let normalizedNamespace = Self.normalize(namespace: namespace) else {
+            return
+        }
+
+        guard browserSelectedNamespacesByContextID[normalizedContextID] != normalizedNamespace else { return }
+        browserSelectedNamespacesByContextID[normalizedContextID] = normalizedNamespace
+        defaults.set(browserSelectedNamespacesByContextID, forKey: DefaultsKey.browserSelectedNamespacesByContextID)
+    }
+
+    func browserRecentNamespaces(for contextID: String) -> [String] {
+        guard let normalizedContextID = Self.normalize(contextKey: contextID) else {
+            return []
+        }
+
+        return browserRecentNamespacesByContextID[normalizedContextID] ?? []
+    }
+
+    func recordBrowserRecentNamespace(_ namespace: String, for contextID: String) {
+        guard let normalizedContextID = Self.normalize(contextKey: contextID),
+              let normalizedNamespace = Self.normalize(namespace: namespace) else {
+            return
+        }
+
+        var updated = browserRecentNamespacesByContextID[normalizedContextID] ?? []
+        updated.removeAll { $0 == normalizedNamespace }
+        updated.insert(normalizedNamespace, at: 0)
+        if updated.count > 10 {
+            updated = Array(updated.prefix(10))
+        }
+
+        guard browserRecentNamespacesByContextID[normalizedContextID] != updated else { return }
+        browserRecentNamespacesByContextID[normalizedContextID] = updated
+        defaults.set(browserRecentNamespacesByContextID, forKey: DefaultsKey.browserRecentNamespacesByContextID)
+    }
+
+    func browserHiddenNamespaces(for contextID: String) -> [String] {
+        guard let normalizedContextID = Self.normalize(contextKey: contextID) else {
+            return []
+        }
+
+        return browserHiddenNamespacesByContextID[normalizedContextID] ?? []
+    }
+
+    func setBrowserNamespaceHidden(_ hidden: Bool, namespace: String, for contextID: String) {
+        guard let normalizedContextID = Self.normalize(contextKey: contextID),
+              let normalizedNamespace = Self.normalize(namespace: namespace) else {
+            return
+        }
+
+        var hiddenNamespaces = browserHiddenNamespacesByContextID[normalizedContextID] ?? []
+        hiddenNamespaces.removeAll { $0 == normalizedNamespace }
+
+        if hidden {
+            hiddenNamespaces.insert(normalizedNamespace, at: 0)
+        }
+
+        let normalizedHiddenNamespaces = Array(hiddenNamespaces.prefix(50))
+        if normalizedHiddenNamespaces.isEmpty {
+            browserHiddenNamespacesByContextID.removeValue(forKey: normalizedContextID)
+        } else {
+            browserHiddenNamespacesByContextID[normalizedContextID] = normalizedHiddenNamespaces
+        }
+
+        defaults.set(browserHiddenNamespacesByContextID, forKey: DefaultsKey.browserHiddenNamespacesByContextID)
+    }
+
+    func setBrowserHiddenNamespaces(_ namespaces: [String], for contextID: String) {
+        guard let normalizedContextID = Self.normalize(contextKey: contextID) else {
+            return
+        }
+
+        let normalizedNamespaces = Array(
+            Set(
+                namespaces.compactMap { Self.normalize(namespace: $0) }
+            )
+        )
+        .sorted()
+        .prefix(200)
+
+        let storedNamespaces = Array(normalizedNamespaces)
+        if storedNamespaces.isEmpty {
+            browserHiddenNamespacesByContextID.removeValue(forKey: normalizedContextID)
+        } else {
+            browserHiddenNamespacesByContextID[normalizedContextID] = storedNamespaces
+        }
+
+        defaults.set(browserHiddenNamespacesByContextID, forKey: DefaultsKey.browserHiddenNamespacesByContextID)
+    }
+
     func override(for context: String) -> String? {
         guard let normalizedContext = Self.normalize(contextKey: context) else {
             return nil
@@ -242,11 +398,21 @@ final class AppSettingsStore: ObservableObject {
         defaults.set(rememberedKubeconfigPaths, forKey: DefaultsKey.rememberedKubeconfigPaths)
         defaults.set(namespaceOverridesByContext, forKey: DefaultsKey.namespaceOverridesByContext)
         defaults.set(recentNamespacesByContext, forKey: DefaultsKey.recentNamespacesByContext)
+        defaults.set(browserKubeconfigPaths, forKey: DefaultsKey.browserKubeconfigPaths)
+        defaults.set(browserHasExplicitKubeconfigSources, forKey: DefaultsKey.browserHasExplicitKubeconfigSources)
+        defaults.set(browserSelectedNamespacesByContextID, forKey: DefaultsKey.browserSelectedNamespacesByContextID)
+        defaults.set(browserRecentNamespacesByContextID, forKey: DefaultsKey.browserRecentNamespacesByContextID)
+        defaults.set(browserHiddenNamespacesByContextID, forKey: DefaultsKey.browserHiddenNamespacesByContextID)
         defaults.set(appUpdateSectionDismissed, forKey: DefaultsKey.appUpdateSectionDismissed)
         persist(path: telepresencePathOverride, key: DefaultsKey.telepresencePathOverride)
         persist(path: kubectlPathOverride, key: DefaultsKey.kubectlPathOverride)
         persist(path: selectedKubeconfigPath, key: DefaultsKey.selectedKubeconfigPath)
         defaults.set(selectedKubeconfigPath != nil, forKey: DefaultsKey.hasExplicitKubeconfigSelection)
+        if let browserLastSelectedContextID {
+            defaults.set(browserLastSelectedContextID, forKey: DefaultsKey.browserLastSelectedContextID)
+        } else {
+            defaults.removeObject(forKey: DefaultsKey.browserLastSelectedContextID)
+        }
 
         for event in AppNotificationEvent.allCases {
             defaults.set(isNotificationEnabled(for: event), forKey: defaultsKey(for: event))
@@ -317,8 +483,8 @@ final class AppSettingsStore: ObservableObject {
         Array(Set(paths.compactMap(normalize(path:)))).sorted()
     }
 
-    private static func normalize(contextKey: String) -> String? {
-        let trimmed = contextKey.trimmingCharacters(in: .whitespacesAndNewlines)
+    private static func normalize(contextKey: String?) -> String? {
+        let trimmed = contextKey?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         return trimmed.isEmpty ? nil : trimmed
     }
 

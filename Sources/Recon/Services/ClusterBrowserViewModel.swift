@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import Foundation
 
 @MainActor
@@ -9,29 +10,40 @@ final class ClusterBrowserViewModel: ObservableObject {
             reconcileSelectionWithVisibleResources()
         }
     }
+    @Published var sidebarFilterText = "" {
+        didSet {
+            handleSidebarFilterChange()
+        }
+    }
+    @Published var isNamespaceEditMode = false {
+        didSet {
+            handleNamespaceEditModeChange()
+        }
+    }
     @Published var selectedResourceID: String?
     @Published private(set) var loadedResources: LoadedResources = .none
-    @Published private(set) var contextDisplay = "-"
-    @Published private(set) var selectedNamespace = ""
-    @Published private(set) var namespacePickerOptions: [NamespacePickerOption] = []
+    @Published private(set) var browserContexts: [BrowserContextDescriptor] = []
+    @Published private(set) var sourceStatuses: [BrowserSourceStatus] = []
+    @Published private(set) var contextLoadStates: [String: BrowserContextLoadState] = [:]
+    @Published private(set) var expandedContextIDs = Set<String>()
+    @Published private(set) var selectedTarget: BrowserTarget?
     @Published private(set) var isLoading = false
-    @Published private(set) var isLoadingNamespacePickerOptions = false
+    @Published private(set) var isLoadingCatalog = false
     @Published private(set) var errorMessage: String?
 
     private let settingsStore: AppSettingsStore
-    private let targetResolver: KubeTargetResolver
-    private let namespaceDiscoveryService: NamespaceDiscoveryService
+    private let browserConfigService: BrowserConfigService
     private let resourceService: KubeResourceService
 
-    private var currentContext: String?
-    private var kubeconfigDefaultNamespace: String?
     private var activationTask: Task<Void, Never>?
     private var fetchTask: Task<Void, Never>?
-    private var namespaceOptionsTask: Task<Void, Never>?
+    private var catalogTask: Task<Void, Never>?
+    private var namespaceTasks: [String: Task<Void, Never>] = [:]
+    private var cancellables = Set<AnyCancellable>()
     private var isWindowActive = false
     private var currentFetchID = UUID()
-    private var currentNamespaceOptionsLoadID = UUID()
     private var hasLoadedAtLeastOnce = false
+    private var hasLoadedCatalogAtLeastOnce = false
 
     private var podSortMode: PodSortMode = .defaultHealth
     private var deploymentSortMode: DeploymentSortMode = .defaultHealth
@@ -40,22 +52,51 @@ final class ClusterBrowserViewModel: ObservableObject {
 
     init(
         settingsStore: AppSettingsStore,
-        targetResolver: KubeTargetResolver,
-        namespaceDiscoveryService: NamespaceDiscoveryService,
+        browserConfigService: BrowserConfigService,
         resourceService: KubeResourceService
     ) {
         self.settingsStore = settingsStore
-        self.targetResolver = targetResolver
-        self.namespaceDiscoveryService = namespaceDiscoveryService
+        self.browserConfigService = browserConfigService
         self.resourceService = resourceService
+        bindSettings()
+    }
+
+    var contextDisplay: String {
+        selectedTarget?.context.name ?? "-"
     }
 
     var displayNamespace: String {
-        selectedNamespace.nilIfEmpty ?? "-"
+        selectedTarget?.namespace.nilIfEmpty ?? "-"
     }
 
     var filterPrompt: String {
         "Filter \(selectedResourceType.title.lowercased())"
+    }
+
+    var displayedBrowserContexts: [BrowserContextDescriptor] {
+        browserContexts.filter { context in
+            if selectedTarget?.context.id == context.id {
+                return true
+            }
+
+            return BrowserSidebarFiltering.matchesContext(
+                context,
+                loadState: contextLoadStates[context.id] ?? .idle,
+                query: sidebarFilterText
+            )
+        }
+    }
+
+    var isSidebarFiltering: Bool {
+        trimmedSidebarFilterText.isEmpty == false
+    }
+
+    var sidebarActiveTargetSummary: String? {
+        guard let selectedTarget else {
+            return nil
+        }
+
+        return "\(selectedTarget.context.name) / \(selectedTarget.namespace)"
     }
 
     var currentVisibleRowCount: Int {
@@ -70,53 +111,8 @@ final class ClusterBrowserViewModel: ObservableObject {
         isLoading && hasLoadedRows
     }
 
-    var selectedNamespacePickerOptionID: String? {
-        guard !selectedNamespace.isEmpty else {
-            return nil
-        }
-
-        if currentNamespaceOverride != nil {
-            return NamespacePickerOption(kind: .namespace(selectedNamespace), title: selectedNamespace).id
-        }
-
-        let defaultNamespace = kubeconfigDefaultNamespace ?? selectedNamespace
-        return NamespacePickerOption(kind: .namespace(defaultNamespace), title: defaultNamespace).id
-    }
-
-    var filteredPods: [PodResource] {
-        guard case .pods(let pods) = loadedResources else {
-            return []
-        }
-
-        return ClusterBrowserSorting.sortPods(filteredPods(from: pods), using: podSortMode)
-    }
-
-    var filteredDeployments: [DeploymentResource] {
-        guard case .deployments(let deployments) = loadedResources else {
-            return []
-        }
-
-        return ClusterBrowserSorting.sortDeployments(filteredDeployments(from: deployments), using: deploymentSortMode)
-    }
-
-    var filteredServices: [ServiceResource] {
-        guard case .services(let services) = loadedResources else {
-            return []
-        }
-
-        return ClusterBrowserSorting.sortServices(filteredServices(from: services), using: serviceSortMode)
-    }
-
-    var filteredConfigMaps: [ConfigMapResource] {
-        guard case .configMaps(let configMaps) = loadedResources else {
-            return []
-        }
-
-        return ClusterBrowserSorting.sortConfigMaps(filteredConfigMaps(from: configMaps), using: configMapSortMode)
-    }
-
     var shouldShowInitialLoadingState: Bool {
-        isLoading && hasLoadedAtLeastOnce == false && currentUnfilteredRowCount == 0
+        (isLoadingCatalog || isLoading) && hasLoadedAtLeastOnce == false && currentUnfilteredRowCount == 0
     }
 
     var shouldShowSearchEmptyState: Bool {
@@ -127,8 +123,32 @@ final class ClusterBrowserViewModel: ObservableObject {
         hasLoadedAtLeastOnce && !isLoading && errorMessage == nil && trimmedFilterText.isEmpty && currentUnfilteredRowCount == 0
     }
 
+    var shouldShowBrowserSourcesEmptyState: Bool {
+        hasLoadedCatalogAtLeastOnce &&
+        !isLoadingCatalog &&
+        browserContexts.isEmpty &&
+        currentUnfilteredRowCount == 0 &&
+        errorMessage == nil
+    }
+
+    var browserSourcesEmptyStateTitle: String {
+        if sourceStatuses.isEmpty {
+            return "No Browser Sources"
+        }
+
+        return "No Valid Browser Contexts"
+    }
+
+    var browserSourcesEmptyStateDescription: String {
+        if sourceStatuses.isEmpty {
+            return "Add kubeconfig files for the cluster browser in Preferences."
+        }
+
+        return "Recon couldn't find a usable context in the configured browser kubeconfig files."
+    }
+
     var shouldShowErrorState: Bool {
-        errorMessage != nil && currentUnfilteredRowCount == 0 && !isLoading
+        errorMessage != nil && currentUnfilteredRowCount == 0 && !isLoading && !isLoadingCatalog
     }
 
     var shouldShowInlineErrorBanner: Bool {
@@ -192,6 +212,38 @@ final class ClusterBrowserViewModel: ObservableObject {
         }
     }
 
+    var filteredPods: [PodResource] {
+        guard case .pods(let pods) = loadedResources else {
+            return []
+        }
+
+        return ClusterBrowserSorting.sortPods(filteredPods(from: pods), using: podSortMode)
+    }
+
+    var filteredDeployments: [DeploymentResource] {
+        guard case .deployments(let deployments) = loadedResources else {
+            return []
+        }
+
+        return ClusterBrowserSorting.sortDeployments(filteredDeployments(from: deployments), using: deploymentSortMode)
+    }
+
+    var filteredServices: [ServiceResource] {
+        guard case .services(let services) = loadedResources else {
+            return []
+        }
+
+        return ClusterBrowserSorting.sortServices(filteredServices(from: services), using: serviceSortMode)
+    }
+
+    var filteredConfigMaps: [ConfigMapResource] {
+        guard case .configMaps(let configMaps) = loadedResources else {
+            return []
+        }
+
+        return ClusterBrowserSorting.sortConfigMaps(filteredConfigMaps(from: configMaps), using: configMapSortMode)
+    }
+
     func activateWindow() {
         guard isWindowActive == false else { return }
         isWindowActive = true
@@ -205,11 +257,10 @@ final class ClusterBrowserViewModel: ObservableObject {
     func deactivateWindow() {
         isWindowActive = false
         activationTask?.cancel()
+        catalogTask?.cancel()
         fetchTask?.cancel()
-        namespaceOptionsTask?.cancel()
-        Task {
-            await namespaceDiscoveryService.clearSessionCache()
-        }
+        namespaceTasks.values.forEach { $0.cancel() }
+        namespaceTasks.removeAll()
         clearState()
     }
 
@@ -222,32 +273,51 @@ final class ClusterBrowserViewModel: ObservableObject {
         startFetch(clearExistingData: true)
     }
 
-    func selectNamespacePickerOption(withID optionID: String) {
-        guard let option = namespacePickerOptions.first(where: { $0.id == optionID }),
-              let context = currentContext else {
+    func refresh() {
+        if selectedTarget == nil {
+            reloadCatalog(preserveCurrentSelection: true)
             return
         }
 
-        switch option.kind {
-        case .namespace(let namespace):
-            guard namespace != selectedNamespace else { return }
-            settingsStore.setOverride(namespace, for: context)
-            settingsStore.recordRecentNamespace(namespace, for: context)
-            selectedNamespace = namespace
-        case .useKubeconfigDefault:
-            guard currentNamespaceOverride != nil else { return }
-            settingsStore.clearOverride(for: context)
-            selectedNamespace = kubeconfigDefaultNamespace ?? "default"
+        if let context = selectedTarget?.context {
+            loadNamespaces(for: context, force: true)
         }
-
-        selectedResourceID = nil
-        errorMessage = nil
-        refreshNamespacePickerOptions()
         startFetch(clearExistingData: false)
     }
 
-    func refresh() {
-        startFetch(clearExistingData: false)
+    func toggleExpanded(for context: BrowserContextDescriptor) {
+        if expandedContextIDs.contains(context.id) {
+            expandedContextIDs.remove(context.id)
+            return
+        }
+
+        expandedContextIDs.insert(context.id)
+        loadNamespaces(for: context)
+    }
+
+    func activateContextRow(_ context: BrowserContextDescriptor) {
+        let shouldCollapse = expandedContextIDs.contains(context.id)
+        selectContext(context)
+
+        if shouldCollapse {
+            expandedContextIDs.remove(context.id)
+        } else {
+            expandedContextIDs.insert(context.id)
+            loadNamespaces(for: context)
+        }
+    }
+
+    func selectContext(_ context: BrowserContextDescriptor) {
+        let namespace = BrowserNamespaceSelectionResolver.resolve(
+            rememberedNamespace: settingsStore.browserSelectedNamespace(for: context.id),
+            defaultNamespace: context.defaultNamespace
+        )
+
+        select(target: BrowserTarget(context: context, namespace: namespace), persistSelection: true, clearExistingData: true)
+    }
+
+    func selectNamespace(_ namespace: String, in context: BrowserContextDescriptor) {
+        select(target: BrowserTarget(context: context, namespace: namespace), persistSelection: true, clearExistingData: true)
     }
 
     func copySelectedResourceCommand() {
@@ -274,16 +344,78 @@ final class ClusterBrowserViewModel: ObservableObject {
         copyToPasteboard(ClusterBrowserInspectCommandBuilder.configMap(name: configMap.name, namespace: configMap.namespace))
     }
 
-    private var currentNamespaceOverride: String? {
-        guard let currentContext else {
-            return nil
+    func displayedNamespaces(for context: BrowserContextDescriptor) -> [String] {
+        let loadState = contextLoadStates[context.id] ?? .idle
+        var displayedNamespaces = BrowserSidebarFiltering.filteredNamespaces(
+            from: loadState.namespaces,
+            query: sidebarFilterText
+        )
+        let activeNamespace = selectedTarget?.context.id == context.id ? selectedTarget?.namespace : nil
+
+        if let activeNamespace,
+           loadState.namespaces.contains(activeNamespace),
+           displayedNamespaces.contains(activeNamespace) == false {
+            displayedNamespaces.insert(activeNamespace, at: 0)
         }
 
-        return settingsStore.override(for: currentContext)
+        guard isNamespaceEditMode == false else {
+            return displayedNamespaces
+        }
+
+        let hiddenNamespaces = Set(settingsStore.browserHiddenNamespaces(for: context.id))
+
+        return displayedNamespaces.filter { namespace in
+            hiddenNamespaces.contains(namespace) == false || namespace == activeNamespace
+        }
+    }
+
+    func isNamespaceHidden(_ namespace: String, in context: BrowserContextDescriptor) -> Bool {
+        settingsStore.browserHiddenNamespaces(for: context.id).contains(namespace)
+    }
+
+    func toggleNamespaceHidden(_ namespace: String, in context: BrowserContextDescriptor) {
+        let isHidden = isNamespaceHidden(namespace, in: context)
+        settingsStore.setBrowserNamespaceHidden(!isHidden, namespace: namespace, for: context.id)
+        objectWillChange.send()
+    }
+
+    func hiddenNamespaceCount(in context: BrowserContextDescriptor) -> Int {
+        let visibleNamespaces = Set((contextLoadStates[context.id] ?? .idle).namespaces)
+        guard visibleNamespaces.isEmpty == false else {
+            return 0
+        }
+
+        return settingsStore.browserHiddenNamespaces(for: context.id)
+            .filter { visibleNamespaces.contains($0) }
+            .count
+    }
+
+    func totalNamespaceCount(in context: BrowserContextDescriptor) -> Int {
+        (contextLoadStates[context.id] ?? .idle).namespaces.count
+    }
+
+    func toggleHideAllNamespaces(in context: BrowserContextDescriptor) {
+        let namespaces = (contextLoadStates[context.id] ?? .idle).namespaces
+        guard namespaces.isEmpty == false else {
+            loadNamespaces(for: context, force: true)
+            return
+        }
+
+        if hiddenNamespaceCount(in: context) == namespaces.count {
+            settingsStore.setBrowserHiddenNamespaces([], for: context.id)
+        } else {
+            settingsStore.setBrowserHiddenNamespaces(namespaces, for: context.id)
+        }
+
+        objectWillChange.send()
     }
 
     private var trimmedFilterText: String {
         filterText.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var trimmedSidebarFilterText: String {
+        sidebarFilterText.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private var currentUnfilteredRowCount: Int {
@@ -347,44 +479,151 @@ final class ClusterBrowserViewModel: ObservableObject {
         }
     }
 
+    private func bindSettings() {
+        settingsStore.$browserKubeconfigPaths
+            .dropFirst()
+            .sink { [weak self] _ in
+                guard let self else { return }
+                Task { @MainActor [weak self] in
+                    guard let self, self.isWindowActive else { return }
+                    self.reloadCatalog(preserveCurrentSelection: true)
+                }
+            }
+            .store(in: &cancellables)
+    }
+
     private func loadInitialState() async {
-        let resolvedMetadata = await targetResolver.resolveTargetMetadata()
-        guard isWindowActive else { return }
+        reloadCatalog(preserveCurrentSelection: false)
+    }
 
-        currentContext = resolvedMetadata.context
-        contextDisplay = resolvedMetadata.context ?? "-"
-        kubeconfigDefaultNamespace = resolvedMetadata.kubeconfigDefaultNamespace ?? resolvedMetadata.namespace ?? "default"
+    private func reloadCatalog(
+        preserveCurrentSelection: Bool
+    ) {
+        catalogTask?.cancel()
+        isLoadingCatalog = true
 
-        if let context = resolvedMetadata.context,
-           let namespaceOverride = settingsStore.override(for: context) {
-            selectedNamespace = namespaceOverride
-        } else {
-            selectedNamespace = kubeconfigDefaultNamespace ?? "default"
+        catalogTask = Task { [weak self] in
+            guard let self else { return }
+            let catalog = await self.browserConfigService.loadContextCatalog()
+            guard self.isWindowActive else { return }
+
+            self.sourceStatuses = catalog.sourceStatuses
+            self.browserContexts = catalog.contexts
+            self.hasLoadedCatalogAtLeastOnce = true
+            self.isLoadingCatalog = false
+
+            guard let target = self.resolveInitialTarget(
+                from: catalog.contexts
+            ) else {
+                self.selectedTarget = nil
+                self.loadedResources = .none
+                self.selectedResourceID = nil
+                self.errorMessage = nil
+                self.isLoading = false
+                return
+            }
+
+            self.select(target: target, persistSelection: true, clearExistingData: true)
+        }
+    }
+
+    private func resolveInitialTarget(
+        from contexts: [BrowserContextDescriptor]
+    ) -> BrowserTarget? {
+        guard contexts.isEmpty == false else {
+            return nil
         }
 
-        refreshNamespacePickerOptions()
-
-        if resolvedMetadata.context == nil, let resolutionError = resolvedMetadata.resolutionError {
-            errorMessage = resolutionError
-            hasLoadedAtLeastOnce = true
-            isLoading = false
-            return
+        if let lastSelectedContextID = settingsStore.browserLastSelectedContextID,
+           let context = contexts.first(where: { $0.id == lastSelectedContextID }) {
+            return BrowserTarget(
+                context: context,
+                namespace: BrowserNamespaceSelectionResolver.resolve(
+                    rememberedNamespace: settingsStore.browserSelectedNamespace(for: context.id),
+                    defaultNamespace: context.defaultNamespace
+                )
+            )
         }
 
-        startFetch(clearExistingData: true)
+        guard let firstContext = contexts.first else {
+            return nil
+        }
+
+        return BrowserTarget(
+            context: firstContext,
+            namespace: BrowserNamespaceSelectionResolver.resolve(
+                rememberedNamespace: settingsStore.browserSelectedNamespace(for: firstContext.id),
+                defaultNamespace: firstContext.defaultNamespace
+            )
+        )
+    }
+
+    private func select(
+        target: BrowserTarget,
+        persistSelection: Bool,
+        clearExistingData: Bool
+    ) {
+        selectedTarget = target
+        selectedResourceID = nil
+        errorMessage = nil
+        expandedContextIDs.insert(target.context.id)
+
+        if persistSelection {
+            settingsStore.setBrowserLastSelectedContextID(target.context.id)
+            settingsStore.setBrowserSelectedNamespace(target.namespace, for: target.context.id)
+            settingsStore.recordBrowserRecentNamespace(target.namespace, for: target.context.id)
+        }
+
+        loadNamespaces(for: target.context)
+        startFetch(clearExistingData: clearExistingData)
+    }
+
+    private func loadNamespaces(for context: BrowserContextDescriptor, force: Bool = false) {
+        if !force {
+            switch contextLoadStates[context.id] ?? .idle {
+            case .loadingNamespaces, .loadedNamespaces:
+                return
+            case .idle, .failed:
+                break
+            }
+        }
+
+        namespaceTasks[context.id]?.cancel()
+        contextLoadStates[context.id] = .loadingNamespaces
+
+        namespaceTasks[context.id] = Task { [weak self] in
+            guard let self else { return }
+            do {
+                let namespaces = try await self.browserConfigService.fetchNamespaces(for: context)
+                guard self.isWindowActive else { return }
+                self.contextLoadStates[context.id] = .loadedNamespaces(namespaces)
+            } catch is CancellationError {
+                return
+            } catch {
+                guard self.isWindowActive else { return }
+                self.contextLoadStates[context.id] = .failed(error.localizedDescription)
+            }
+        }
+    }
+
+    private func handleSidebarFilterChange() {
+        guard isWindowActive, trimmedSidebarFilterText.isEmpty == false else { return }
+
+        for context in browserContexts {
+            loadNamespaces(for: context)
+        }
+    }
+
+    private func handleNamespaceEditModeChange() {
+        guard isWindowActive, isNamespaceEditMode else { return }
+
+        for context in displayedBrowserContexts {
+            loadNamespaces(for: context)
+        }
     }
 
     private func startFetch(clearExistingData: Bool) {
-        guard isWindowActive else { return }
-
-        let namespace = selectedNamespace.trimmingCharacters(in: .whitespacesAndNewlines)
-        let resourceType = selectedResourceType
-        guard namespace.isEmpty == false else {
-            errorMessage = "Couldn't resolve the active namespace."
-            hasLoadedAtLeastOnce = true
-            isLoading = false
-            return
-        }
+        guard isWindowActive, let selectedTarget else { return }
 
         fetchTask?.cancel()
         currentFetchID = UUID()
@@ -398,17 +637,13 @@ final class ClusterBrowserViewModel: ObservableObject {
         errorMessage = nil
 
         fetchTask = Task { [weak self] in
-            await self?.performFetch(
-                resourceType: resourceType,
-                namespace: namespace,
-                fetchID: fetchID
-            )
+            await self?.performFetch(target: selectedTarget, fetchID: fetchID)
         }
     }
 
-    private func performFetch(resourceType: ResourceType, namespace: String, fetchID: UUID) async {
+    private func performFetch(target: BrowserTarget, fetchID: UUID) async {
         do {
-            let resources = try await loadResources(resourceType: resourceType, namespace: namespace)
+            let resources = try await loadResources(target: target)
             guard currentFetchID == fetchID, isWindowActive else { return }
 
             loadedResources = resources
@@ -416,6 +651,10 @@ final class ClusterBrowserViewModel: ObservableObject {
             isLoading = false
             errorMessage = nil
             reconcileSelectionWithVisibleResources()
+
+            if case .failed = contextLoadStates[target.context.id] {
+                contextLoadStates[target.context.id] = .idle
+            }
         } catch is CancellationError {
             return
         } catch {
@@ -424,108 +663,41 @@ final class ClusterBrowserViewModel: ObservableObject {
             hasLoadedAtLeastOnce = true
             isLoading = false
             errorMessage = error.localizedDescription
-            reconcileSelectionWithVisibleResources()
+            loadedResources = .none
+            selectedResourceID = nil
+            contextLoadStates[target.context.id] = .failed(error.localizedDescription)
         }
     }
 
-    private func loadResources(resourceType: ResourceType, namespace: String) async throws -> LoadedResources {
-        switch resourceType {
+    private func loadResources(target: BrowserTarget) async throws -> LoadedResources {
+        switch selectedResourceType {
         case .pods:
-            return .pods(try await resourceService.fetchPods(namespace: namespace))
+            return .pods(try await resourceService.fetchPods(target: target))
         case .deployments:
-            return .deployments(try await resourceService.fetchDeployments(namespace: namespace))
+            return .deployments(try await resourceService.fetchDeployments(target: target))
         case .services:
-            return .services(try await resourceService.fetchServices(namespace: namespace))
+            return .services(try await resourceService.fetchServices(target: target))
         case .configMaps:
-            return .configMaps(try await resourceService.fetchConfigMaps(namespace: namespace))
+            return .configMaps(try await resourceService.fetchConfigMaps(target: target))
         }
-    }
-
-    private func refreshNamespacePickerOptions() {
-        guard let currentContext else {
-            namespacePickerOptions = []
-            isLoadingNamespacePickerOptions = false
-            return
-        }
-
-        namespaceOptionsTask?.cancel()
-        currentNamespaceOptionsLoadID = UUID()
-        let loadID = currentNamespaceOptionsLoadID
-        isLoadingNamespacePickerOptions = true
-
-        namespaceOptionsTask = Task { [weak self] in
-            guard let self else { return }
-            let result = await self.namespaceDiscoveryService.fetchAvailable(for: currentContext)
-            guard self.currentNamespaceOptionsLoadID == loadID, self.isWindowActive else { return }
-
-            self.namespacePickerOptions = self.makeNamespacePickerOptions(from: result)
-            self.isLoadingNamespacePickerOptions = false
-        }
-    }
-
-    private func makeNamespacePickerOptions(from result: NamespaceListResult) -> [NamespacePickerOption] {
-        let orderedNamespaces = result.available +
-            result.recentlyUsed +
-            [result.kubeconfigDefault] +
-            [selectedNamespace].compactMap { $0.nilIfEmpty }
-
-        var options: [NamespacePickerOption] = []
-        var seen = Set<String>()
-
-        if result.currentOverride != nil {
-            options.append(
-                NamespacePickerOption(
-                    kind: .useKubeconfigDefault,
-                    title: formatNamespaceOptionTitle(result.kubeconfigDefault, suffix: "kubeconfig default")
-                )
-            )
-        }
-
-        for namespace in orderedNamespaces {
-            let trimmedNamespace = namespace.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard trimmedNamespace.isEmpty == false,
-                  seen.insert(trimmedNamespace).inserted else {
-                continue
-            }
-
-            let suffix = result.currentOverride != nil && trimmedNamespace == result.kubeconfigDefault
-                ? "kubeconfig default"
-                : nil
-            options.append(
-                NamespacePickerOption(
-                    kind: .namespace(trimmedNamespace),
-                    title: formatNamespaceOptionTitle(trimmedNamespace, suffix: suffix)
-                )
-            )
-        }
-
-        return options
-    }
-
-    private func formatNamespaceOptionTitle(_ namespace: String, suffix: String?) -> String {
-        var components = [namespace]
-        if let suffix, suffix.isEmpty == false {
-            components.append("(\(suffix))")
-        }
-        if ProductionDetector.isProductionNamespace(namespace) {
-            components.append("[PROD]")
-        }
-        return components.joined(separator: " ")
     }
 
     private func clearState() {
-        currentContext = nil
-        kubeconfigDefaultNamespace = nil
-        selectedNamespace = ""
-        contextDisplay = "-"
-        namespacePickerOptions = []
+        browserContexts = []
+        sourceStatuses = []
+        contextLoadStates = [:]
+        expandedContextIDs = []
+        selectedTarget = nil
         loadedResources = .none
         filterText = ""
+        sidebarFilterText = ""
+        isNamespaceEditMode = false
         selectedResourceID = nil
         errorMessage = nil
         isLoading = false
-        isLoadingNamespacePickerOptions = false
+        isLoadingCatalog = false
         hasLoadedAtLeastOnce = false
+        hasLoadedCatalogAtLeastOnce = false
         podSortMode = .defaultHealth
         deploymentSortMode = .defaultHealth
         serviceSortMode = .name(.ascending)

@@ -4,20 +4,15 @@ import SwiftUI
 struct ClusterBrowserWindowSceneView: View {
     @StateObject private var viewModel: ClusterBrowserViewModel
 
-    init(settingsStore: AppSettingsStore) {
-        let environmentResolver = CommandEnvironmentResolver()
-        let targetResolver = KubeTargetResolver(environmentResolver: environmentResolver)
-        let namespaceDiscoveryService = NamespaceDiscoveryService(
-            environmentResolver: environmentResolver,
-            targetResolver: targetResolver,
-            settingsStore: settingsStore
-        )
+    init(
+        settingsStore: AppSettingsStore,
+        browserConfigService: BrowserConfigService
+    ) {
         _viewModel = StateObject(
             wrappedValue: ClusterBrowserViewModel(
                 settingsStore: settingsStore,
-                targetResolver: targetResolver,
-                namespaceDiscoveryService: namespaceDiscoveryService,
-                resourceService: KubeResourceService(environmentResolver: environmentResolver)
+                browserConfigService: browserConfigService,
+                resourceService: KubeResourceService(browserConfigService: browserConfigService)
             )
         )
     }
@@ -31,22 +26,28 @@ struct ClusterBrowserWindowView: View {
     @ObservedObject var viewModel: ClusterBrowserViewModel
 
     var body: some View {
-        VStack(spacing: 0) {
-            tabBar
-            controlsSection
+        HSplitView {
+            sidebar
+                .frame(minWidth: 220, idealWidth: 260, maxWidth: 380)
 
-            if viewModel.shouldShowInlineErrorBanner, let errorMessage = viewModel.errorMessage {
-                ClusterBrowserInlineErrorBanner(message: errorMessage) {
-                    viewModel.refresh()
+            VStack(spacing: 0) {
+                tabBar
+                controlsSection
+
+                if viewModel.shouldShowInlineErrorBanner, let errorMessage = viewModel.errorMessage {
+                    ClusterBrowserInlineErrorBanner(message: errorMessage) {
+                        viewModel.refresh()
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 12)
                 }
-                .padding(.horizontal, 16)
-                .padding(.bottom, 12)
-            }
 
-            contentArea
-            statusBar
+                contentArea
+                statusBar
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .frame(minWidth: 840, minHeight: 620)
+        .frame(minWidth: 960, minHeight: 700)
         .background(ClusterBrowserWindowConfigurator())
         .background(copyCommandShortcutButton)
         .onAppear {
@@ -54,6 +55,123 @@ struct ClusterBrowserWindowView: View {
         }
         .onDisappear {
             viewModel.deactivateWindow()
+        }
+    }
+
+    private var sidebar: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Text("Clusters")
+                    .font(.system(size: 13, weight: .semibold))
+
+                Spacer(minLength: 8)
+
+                Button(viewModel.isNamespaceEditMode ? "Done" : "Edit") {
+                    viewModel.isNamespaceEditMode.toggle()
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+            }
+            .padding(.horizontal, 14)
+            .padding(.top, 14)
+            .padding(.bottom, 8)
+
+            TextField("Filter clusters / namespaces", text: $viewModel.sidebarFilterText)
+                .textFieldStyle(.roundedBorder)
+                .font(.system(size: 12, weight: .regular))
+                .padding(.horizontal, 14)
+                .padding(.bottom, 10)
+
+            Rectangle()
+                .fill(Color(nsColor: .separatorColor))
+                .frame(height: 0.5)
+
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 2) {
+                    if viewModel.browserContexts.isEmpty && viewModel.isLoadingCatalog == false {
+                        Text(viewModel.browserSourcesEmptyStateDescription)
+                            .font(.system(size: 12, weight: .regular))
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 12)
+                    } else if viewModel.displayedBrowserContexts.isEmpty && viewModel.isSidebarFiltering {
+                        Text("No clusters or namespaces match `\(viewModel.sidebarFilterText)`.")
+                            .font(.system(size: 12, weight: .regular))
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 12)
+                    } else {
+                        ForEach(viewModel.displayedBrowserContexts) { context in
+                            contextSection(for: context)
+                        }
+                    }
+                }
+                .padding(.vertical, 10)
+            }
+            .background(Color(nsColor: .controlBackgroundColor).opacity(0.35))
+        }
+    }
+
+    @ViewBuilder
+    private func contextSection(for context: BrowserContextDescriptor) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 6) {
+                ClusterBrowserContextRow(
+                    context: context,
+                    isSelected: isContextSelected(context),
+                    isExpanded: viewModel.expandedContextIDs.contains(context.id),
+                    loadState: viewModel.contextLoadStates[context.id] ?? .idle,
+                    onActivate: {
+                        viewModel.activateContextRow(context)
+                    }
+                )
+
+                if viewModel.isNamespaceEditMode {
+                    let totalCount = viewModel.totalNamespaceCount(in: context)
+                    let hiddenCount = viewModel.hiddenNamespaceCount(in: context)
+
+                    if totalCount > 0 {
+                        Text("\(hiddenCount)/\(totalCount)")
+                            .font(.system(size: 10, weight: .medium, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 3)
+                            .background(Color(nsColor: .controlBackgroundColor).opacity(0.55), in: Capsule())
+                            .help("Hidden namespaces / total namespaces")
+
+                        Button(hiddenCount == totalCount ? "Show All" : "Hide All") {
+                            viewModel.toggleHideAllNamespaces(in: context)
+                        }
+                        .buttonStyle(ClusterBrowserSidebarActionButtonStyle())
+                        .help(hiddenCount == totalCount ? "Show all namespaces in normal mode" : "Hide all namespaces in normal mode")
+                    }
+                }
+            }
+            .padding(.horizontal, 10)
+            .frame(minHeight: 32)
+
+            let namespaces = viewModel.displayedNamespaces(for: context)
+            if (viewModel.expandedContextIDs.contains(context.id) || viewModel.isSidebarFiltering),
+               namespaces.isEmpty == false {
+                ForEach(namespaces, id: \.self) { namespace in
+                    ClusterBrowserNamespaceRow(
+                        namespace: namespace,
+                        isSelected: isNamespaceSelected(namespace, in: context),
+                        isHidden: viewModel.isNamespaceHidden(namespace, in: context),
+                        isEditMode: viewModel.isNamespaceEditMode,
+                        isProductionLike: ProductionDetector.isProductionNamespace(namespace),
+                        onSelect: {
+                            viewModel.selectNamespace(namespace, in: context)
+                        },
+                        onToggleHidden: {
+                            viewModel.toggleNamespaceHidden(namespace, in: context)
+                        }
+                    )
+                    .padding(.horizontal, 10)
+                }
+            }
         }
     }
 
@@ -99,6 +217,7 @@ struct ClusterBrowserWindowView: View {
         HStack(spacing: 10) {
             KeyboardFilterField(prompt: viewModel.filterPrompt, text: $viewModel.filterText)
                 .frame(minWidth: 220)
+                .disabled(viewModel.selectedTarget == nil)
 
             Button {
                 viewModel.refresh()
@@ -111,19 +230,6 @@ struct ClusterBrowserWindowView: View {
             .controlSize(.regular)
             .keyboardShortcut("r", modifiers: [.command])
             .help("Refresh")
-
-            ClusterNamespacePicker(
-                title: viewModel.displayNamespace,
-                options: viewModel.namespacePickerOptions,
-                selection: Binding(
-                    get: { viewModel.selectedNamespacePickerOptionID },
-                    set: { newValue in
-                        guard let newValue else { return }
-                        viewModel.selectNamespacePickerOption(withID: newValue)
-                    }
-                ),
-                isLoading: viewModel.isLoadingNamespacePickerOptions
-            )
 
             Spacer(minLength: 0)
         }
@@ -142,7 +248,8 @@ struct ClusterBrowserWindowView: View {
                     viewModel.shouldShowErrorState ||
                     viewModel.shouldShowSearchEmptyState ||
                     viewModel.shouldShowResourceEmptyState ||
-                    viewModel.shouldShowInitialLoadingState
+                    viewModel.shouldShowInitialLoadingState ||
+                    viewModel.shouldShowBrowserSourcesEmptyState
                     ? Color(nsColor: .windowBackgroundColor).opacity(0.94)
                     : Color.clear
                 )
@@ -403,7 +510,16 @@ struct ClusterBrowserWindowView: View {
 
     @ViewBuilder
     private var overlayStateView: some View {
-        if viewModel.shouldShowErrorState {
+        if viewModel.shouldShowBrowserSourcesEmptyState {
+            ContentUnavailableView(
+                label: {
+                    Label(viewModel.browserSourcesEmptyStateTitle, systemImage: "externaldrive.badge.exclamationmark")
+                },
+                description: {
+                    Text(viewModel.browserSourcesEmptyStateDescription)
+                }
+            )
+        } else if viewModel.shouldShowErrorState {
             ContentUnavailableView(
                 label: {
                     Label("Couldn't Load \(viewModel.selectedResourceType.title)", systemImage: "exclamationmark.triangle")
@@ -509,6 +625,15 @@ struct ClusterBrowserWindowView: View {
         )
     }
 
+    private func isContextSelected(_ context: BrowserContextDescriptor) -> Bool {
+        viewModel.selectedTarget?.context.id == context.id
+    }
+
+    private func isNamespaceSelected(_ namespace: String, in context: BrowserContextDescriptor) -> Bool {
+        viewModel.selectedTarget?.context.id == context.id &&
+        viewModel.selectedTarget?.namespace == namespace
+    }
+
     private static func tabShortcut(for index: Int) -> KeyEquivalent {
         switch index {
         case 0:
@@ -554,56 +679,6 @@ struct ClusterBrowserWindowView: View {
     }
 }
 
-private struct ClusterNamespacePicker: View {
-    let title: String
-    let options: [NamespacePickerOption]
-    let selection: Binding<String?>
-    let isLoading: Bool
-
-    var body: some View {
-        HStack(spacing: 6) {
-            Text("ns")
-                .font(.system(size: 11, weight: .medium))
-                .foregroundStyle(.secondary)
-
-            if options.isEmpty {
-                Text(title)
-                    .font(.system(size: 11, weight: .regular, design: .monospaced))
-                    .foregroundStyle(.primary)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 6)
-                    .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-            } else {
-                Picker(selection: selection) {
-                    ForEach(options) { option in
-                        Text(option.title).tag(Optional(option.id))
-                    }
-                } label: {
-                    HStack(spacing: 6) {
-                        Text(title)
-                            .font(.system(size: 11, weight: .regular, design: .monospaced))
-                            .foregroundStyle(.primary)
-
-                        Image(systemName: "chevron.up.chevron.down")
-                            .font(.system(size: 9, weight: .semibold))
-                            .foregroundStyle(.tertiary)
-                    }
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 6)
-                    .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-                }
-                .pickerStyle(.menu)
-                .labelsHidden()
-            }
-
-            if isLoading {
-                ProgressView()
-                    .controlSize(.mini)
-            }
-        }
-    }
-}
-
 private struct ClusterBrowserInlineErrorBanner: View {
     let message: String
     let retry: () -> Void
@@ -628,6 +703,290 @@ private struct ClusterBrowserInlineErrorBanner: View {
             RoundedRectangle(cornerRadius: 10, style: .continuous)
                 .stroke(Color.red.opacity(0.18), lineWidth: 0.5)
         )
+    }
+}
+
+private struct ClusterBrowserNamespaceRow: View {
+    let namespace: String
+    let isSelected: Bool
+    let isHidden: Bool
+    let isEditMode: Bool
+    let isProductionLike: Bool
+    let onSelect: () -> Void
+    let onToggleHidden: () -> Void
+
+    @State private var isHovering = false
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Circle()
+                .fill(isSelected ? Color.accentColor : Color.clear)
+                .frame(width: 7, height: 7)
+                .overlay(
+                    Circle()
+                        .stroke(isSelected ? Color.accentColor : Color(nsColor: .separatorColor), lineWidth: 1)
+                )
+
+            Text(namespace)
+                .font(.system(size: 11, weight: isSelected ? .semibold : .regular, design: .monospaced))
+                .foregroundStyle(textColor)
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .help(namespace)
+
+            if isSelected {
+                Text("CURRENT")
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundStyle(Color.accentColor)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(Color.accentColor.opacity(0.12), in: Capsule())
+            }
+
+            if isHidden && isEditMode {
+                Text("HIDDEN")
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(Color(nsColor: .controlBackgroundColor), in: Capsule())
+            }
+
+            Spacer(minLength: 0)
+
+            if isProductionLike {
+                Image(systemName: "exclamationmark.circle.fill")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(.orange)
+            }
+
+            if isEditMode {
+                ClusterBrowserSidebarIconButton(
+                    systemName: isHidden ? "eye.slash" : "eye",
+                    helpText: isHidden
+                    ? "Show namespace in normal mode"
+                    : "Hide namespace from normal mode"
+                ) {
+                    onToggleHidden()
+                }
+            }
+        }
+        .frame(minHeight: 24)
+        .padding(.leading, 36)
+        .padding(.trailing, 12)
+        .padding(.vertical, 4)
+        .background(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(backgroundColor)
+        )
+        .contentShape(Rectangle())
+        .onHover { hovering in
+            isHovering = hovering
+        }
+        .onTapGesture {
+            guard isEditMode == false else { return }
+            onSelect()
+        }
+    }
+
+    private var textColor: Color {
+        if isHidden && isEditMode {
+            return Color(nsColor: .tertiaryLabelColor)
+        }
+
+        if isSelected || (isHovering && isEditMode == false) {
+            return Color(nsColor: .labelColor)
+        }
+
+        return Color(nsColor: .secondaryLabelColor)
+    }
+
+    private var backgroundColor: Color {
+        if isSelected {
+            return Color.accentColor.opacity(0.1)
+        }
+
+        if isHovering && isEditMode == false {
+            return Color(nsColor: .controlAccentColor).opacity(0.08)
+        }
+
+        return Color.clear
+    }
+}
+
+private struct ClusterBrowserContextRow: View {
+    let context: BrowserContextDescriptor
+    let isSelected: Bool
+    let isExpanded: Bool
+    let loadState: BrowserContextLoadState
+    let onActivate: () -> Void
+
+    @State private var isHovering = false
+
+    var body: some View {
+        Button(action: onActivate) {
+            HStack(spacing: 8) {
+                Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(isHovering ? Color(nsColor: .labelColor) : Color(nsColor: .tertiaryLabelColor))
+                    .frame(width: 12, height: 12)
+
+                Circle()
+                    .fill(context.isProductionLike ? Color.orange : Color.clear)
+                    .frame(width: 8, height: 8)
+                    .overlay(
+                        Circle()
+                            .stroke(context.isProductionLike ? Color.orange : Color(nsColor: .separatorColor), lineWidth: 1)
+                    )
+
+                Text(context.name)
+                    .font(.system(size: 12, weight: isSelected ? .semibold : .regular))
+                    .foregroundStyle(Color(nsColor: .labelColor))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .help(context.name)
+
+                if let sourceBadge = context.sourceBadge {
+                    Text(sourceBadge)
+                        .font(.system(size: 9, weight: .medium))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Color(nsColor: .controlBackgroundColor), in: Capsule())
+                        .help(context.sourcePath)
+                }
+
+                if isSelected {
+                    Text("ACTIVE")
+                        .font(.system(size: 9, weight: .bold))
+                        .foregroundStyle(Color.accentColor)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Color.accentColor.opacity(0.12), in: Capsule())
+                }
+
+                if case .loadingNamespaces = loadState {
+                    ProgressView()
+                        .controlSize(.mini)
+                } else if case .failed = loadState {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(.orange)
+                }
+
+                Spacer(minLength: 0)
+            }
+            .frame(minHeight: 24)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(backgroundColor)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .stroke(borderColor, lineWidth: 0.5)
+            )
+            .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .onHover { isHovering = $0 }
+    }
+
+    private var backgroundColor: Color {
+        if isSelected {
+            return Color.accentColor.opacity(0.14)
+        }
+
+        if isHovering {
+            return Color(nsColor: .controlAccentColor).opacity(0.08)
+        }
+
+        return Color.clear
+    }
+
+    private var borderColor: Color {
+        if isHovering && isSelected == false {
+            return Color(nsColor: .controlAccentColor).opacity(0.18)
+        }
+
+        return Color.clear
+    }
+}
+
+private struct ClusterBrowserSidebarIconButton: View {
+    let systemName: String
+    let helpText: String
+    let action: () -> Void
+
+    @State private var isHovering = false
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: systemName)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(isHovering ? Color(nsColor: .labelColor) : .secondary)
+                .frame(width: 24, height: 24)
+                .background(
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .fill(isHovering ? Color.accentColor.opacity(0.12) : Color.clear)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .stroke(isHovering ? Color.accentColor.opacity(0.24) : Color.clear, lineWidth: 0.5)
+                )
+                .contentShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .help(helpText)
+        .onHover { isHovering = $0 }
+    }
+}
+
+private struct ClusterBrowserSidebarActionButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        SidebarActionButtonBody(configuration: configuration)
+    }
+
+    private struct SidebarActionButtonBody: View {
+        let configuration: Configuration
+
+        @State private var isHovering = false
+
+        var body: some View {
+            configuration.label
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(foregroundColor)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(
+                    Capsule(style: .continuous)
+                        .fill(backgroundColor)
+                )
+                .overlay(
+                    Capsule(style: .continuous)
+                        .stroke(borderColor, lineWidth: 0.5)
+                )
+                .contentShape(Capsule(style: .continuous))
+                .onHover { isHovering = $0 }
+        }
+
+        private var isHighlighted: Bool {
+            isHovering || configuration.isPressed
+        }
+
+        private var foregroundColor: Color {
+            isHighlighted ? Color(nsColor: .labelColor) : .secondary
+        }
+
+        private var backgroundColor: Color {
+            isHighlighted ? Color.accentColor.opacity(0.12) : Color.clear
+        }
+
+        private var borderColor: Color {
+            isHighlighted ? Color.accentColor.opacity(0.24) : Color(nsColor: .separatorColor).opacity(0.35)
+        }
     }
 }
 

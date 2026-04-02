@@ -4,23 +4,13 @@ import SwiftUI
 @MainActor
 enum ClusterBrowserWindowPresenter {
     static func present(using openWindow: OpenWindowAction) {
-        if let window = clusterWindow {
+        if let window = mostRecentClusterWindow {
             bringToFront(window)
             return
         }
 
         openWindow(id: AppWindowID.cluster)
-
-        Task { @MainActor in
-            for _ in 0..<10 {
-                if let window = clusterWindow {
-                    bringToFront(window)
-                    return
-                }
-
-                try? await Task.sleep(for: .milliseconds(50))
-            }
-        }
+        focusMostRecentClusterWindow()
     }
 
     static func configure(_ window: NSWindow) {
@@ -30,7 +20,20 @@ enum ClusterBrowserWindowPresenter {
         window.setFrameAutosaveName(AppWindowID.cluster)
     }
 
-    private static var clusterWindow: NSWindow? {
+    private static func focusMostRecentClusterWindow() {
+        Task { @MainActor in
+            for _ in 0..<10 {
+                if let window = mostRecentClusterWindow {
+                    bringToFront(window)
+                    return
+                }
+
+                try? await Task.sleep(for: .milliseconds(50))
+            }
+        }
+    }
+
+    private static var mostRecentClusterWindow: NSWindow? {
         NSApp.windows.first { window in
             window.identifier?.rawValue == AppWindowID.cluster
         }

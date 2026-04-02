@@ -11,6 +11,10 @@ struct ClusterBrowserPhase1Harness {
         try testSelectionRetention()
         try testInspectCommandGeneration()
         try testConfigMapDecoding()
+        try testBrowserContextIdentity()
+        try testBrowserNamespaceFallback()
+        try testDuplicateContextBadges()
+        try testSidebarFiltering()
 
         print("Cluster browser phase 1 harness passed")
     }
@@ -342,6 +346,104 @@ struct ClusterBrowserPhase1Harness {
         try expect(decoded[1].dataKeyCount == 0, "Missing data should decode as zero keys")
         try expect(decoded[1].isImmutable == false, "Missing immutable flag should default to false")
         try expect(decoded[1].createdAt != nil, "Fractional-second timestamps should decode")
+    }
+
+    private static func testBrowserContextIdentity() throws {
+        let sourcePath = "/Users/test/.kube/config-qa"
+        let contextID = BrowserContextIdentity.makeID(contextName: "qa", sourcePath: sourcePath)
+        try expect(
+            contextID == "/Users/test/.kube/config-qa#qa",
+            "Browser context IDs should be source-aware"
+        )
+    }
+
+    private static func testBrowserNamespaceFallback() throws {
+        try expect(
+            BrowserNamespaceSelectionResolver.resolve(
+                rememberedNamespace: "test",
+                defaultNamespace: "default"
+            ) == "test",
+            "Remembered namespace should win over the kubeconfig default"
+        )
+        try expect(
+            BrowserNamespaceSelectionResolver.resolve(
+                rememberedNamespace: nil,
+                defaultNamespace: "staging"
+            ) == "staging",
+            "Default namespace should be used when no remembered namespace exists"
+        )
+        try expect(
+            BrowserNamespaceSelectionResolver.resolve(
+                rememberedNamespace: nil,
+                defaultNamespace: nil
+            ) == "default",
+            "Default fallback should be `default` when neither value exists"
+        )
+    }
+
+    private static func testDuplicateContextBadges() throws {
+        let qaA = BrowserContextDescriptor(
+            id: BrowserContextIdentity.makeID(contextName: "qa", sourcePath: "/tmp/a.yaml"),
+            name: "qa",
+            sourcePath: "/tmp/a.yaml",
+            sourceBadge: "a.yaml",
+            defaultNamespace: "default",
+            isProductionLike: false
+        )
+        let qaB = BrowserContextDescriptor(
+            id: BrowserContextIdentity.makeID(contextName: "qa", sourcePath: "/tmp/b.yaml"),
+            name: "qa",
+            sourcePath: "/tmp/b.yaml",
+            sourceBadge: "b.yaml",
+            defaultNamespace: "default",
+            isProductionLike: false
+        )
+        let stg = BrowserContextDescriptor(
+            id: BrowserContextIdentity.makeID(contextName: "stg", sourcePath: "/tmp/a.yaml"),
+            name: "stg",
+            sourcePath: "/tmp/a.yaml",
+            sourceBadge: nil,
+            defaultNamespace: "default",
+            isProductionLike: false
+        )
+
+        try expect(qaA.sourceBadge != nil && qaB.sourceBadge != nil, "Duplicate context names should carry source badges")
+        try expect(stg.sourceBadge == nil, "Unique context names should not need source badges")
+    }
+
+    private static func testSidebarFiltering() throws {
+        let context = BrowserContextDescriptor(
+            id: BrowserContextIdentity.makeID(contextName: "qa", sourcePath: "/tmp/qa.yaml"),
+            name: "qa",
+            sourcePath: "/tmp/qa.yaml",
+            sourceBadge: nil,
+            defaultNamespace: "default",
+            isProductionLike: false
+        )
+
+        try expect(
+            BrowserSidebarFiltering.matchesContext(
+                context,
+                loadState: .loadedNamespaces(["default", "payments", "test"]),
+                query: "pay"
+            ),
+            "Namespace matches should keep the context visible while filtering"
+        )
+        try expect(
+            BrowserSidebarFiltering.filteredNamespaces(
+                from: ["default", "payments", "test"],
+                query: "te"
+            ) == ["test"],
+            "Namespace filtering should only keep matching namespaces"
+        )
+        try expect(
+            BrowserSidebarFiltering.matchesContext(
+                context,
+                loadState: .loadedNamespaces(["default"]),
+                query: "stg"
+            ) == false,
+            "Contexts with no context-name, source, or namespace match should be filtered out"
+        )
     }
 
     private static func expect(_ condition: @autoclosure () -> Bool, _ message: String) throws {
