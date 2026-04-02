@@ -44,9 +44,11 @@ struct ClusterBrowserWindowView: View {
             }
 
             contentArea
+            statusBar
         }
-        .frame(width: 720, height: 520)
+        .frame(minWidth: 840, minHeight: 620)
         .background(ClusterBrowserWindowConfigurator())
+        .background(copyCommandShortcutButton)
         .onAppear {
             viewModel.activateWindow()
         }
@@ -94,47 +96,36 @@ struct ClusterBrowserWindowView: View {
     }
 
     private var controlsSection: some View {
-        VStack(spacing: 12) {
-            HStack(spacing: 10) {
-                KeyboardFilterField(prompt: viewModel.filterPrompt, text: $viewModel.filterText)
-                    .frame(minWidth: 220)
+        HStack(spacing: 10) {
+            KeyboardFilterField(prompt: viewModel.filterPrompt, text: $viewModel.filterText)
+                .frame(minWidth: 220)
 
-                Button {
-                    viewModel.refresh()
-                } label: {
-                    Label("Refresh", systemImage: "arrow.clockwise")
-                        .labelStyle(.iconOnly)
-                        .font(.system(size: 13, weight: .semibold))
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.regular)
-                .keyboardShortcut("r", modifiers: [.command])
-                .help("Refresh")
-
-                ClusterNamespacePicker(
-                    title: viewModel.displayNamespace,
-                    options: viewModel.namespacePickerOptions,
-                    selection: Binding(
-                        get: { viewModel.selectedNamespacePickerOptionID },
-                        set: { newValue in
-                            guard let newValue else { return }
-                            viewModel.selectNamespacePickerOption(withID: newValue)
-                        }
-                    ),
-                    isLoading: viewModel.isLoadingNamespacePickerOptions
-                )
+            Button {
+                viewModel.refresh()
+            } label: {
+                Label("Refresh", systemImage: "arrow.clockwise")
+                    .labelStyle(.iconOnly)
+                    .font(.system(size: 13, weight: .semibold))
             }
+            .buttonStyle(.bordered)
+            .controlSize(.regular)
+            .keyboardShortcut("r", modifiers: [.command])
+            .help("Refresh")
 
-            HStack(spacing: 12) {
-                ClusterInfoBadge(label: "Context", value: viewModel.contextDisplay)
-                ClusterInfoBadge(label: "Namespace", value: viewModel.displayNamespace)
+            ClusterNamespacePicker(
+                title: viewModel.displayNamespace,
+                options: viewModel.namespacePickerOptions,
+                selection: Binding(
+                    get: { viewModel.selectedNamespacePickerOptionID },
+                    set: { newValue in
+                        guard let newValue else { return }
+                        viewModel.selectNamespacePickerOption(withID: newValue)
+                    }
+                ),
+                isLoading: viewModel.isLoadingNamespacePickerOptions
+            )
 
-                Spacer(minLength: 0)
-
-                Text("\(viewModel.currentVisibleRowCount) shown")
-                    .font(.system(size: 11, weight: .regular))
-                    .foregroundStyle(.secondary)
-            }
+            Spacer(minLength: 0)
         }
         .padding(.horizontal, 16)
         .padding(.top, 12)
@@ -162,7 +153,7 @@ struct ClusterBrowserWindowView: View {
                     ProgressView()
                         .controlSize(.small)
 
-                    Text("Refreshing…")
+                    Text("Refreshing...")
                         .font(.system(size: 11, weight: .regular))
                         .foregroundStyle(.secondary)
                 }
@@ -182,90 +173,155 @@ struct ClusterBrowserWindowView: View {
     private var currentTable: some View {
         switch viewModel.selectedResourceType {
         case .pods:
-            Table(viewModel.filteredPods, selection: $viewModel.selectedResourceID) {
-                TableColumn("Name") { pod in
+            Table(viewModel.filteredPods, selection: $viewModel.selectedResourceID, sortOrder: podSortOrderBinding) {
+                TableColumn("Name", value: \.name) { pod in
                     Text(pod.name)
                         .font(.system(size: 12, weight: .regular, design: .monospaced))
+                        .clusterBrowserTableCell {
+                            Button("Copy kubectl Command") {
+                                viewModel.copyInspectCommand(for: pod)
+                            }
+                        }
                 }
                 .width(min: 240, ideal: 280)
 
-                TableColumn("Status") { pod in
-                    Text(pod.statusText)
-                        .foregroundStyle(.secondary)
+                TableColumn("Status", value: \.statusSortValue) { pod in
+                    Text(pod.displayStatusText)
+                        .foregroundStyle(Self.color(for: pod.healthBucket))
+                        .clusterBrowserTableCell {
+                            Button("Copy kubectl Command") {
+                                viewModel.copyInspectCommand(for: pod)
+                            }
+                        }
                 }
-                .width(min: 110, ideal: 120)
+                .width(min: 130, ideal: 150)
 
-                TableColumn("Ready") { pod in
+                TableColumn("Ready", value: \.readySortValue) { pod in
                     Text(pod.readyText)
                         .foregroundStyle(.secondary)
+                        .clusterBrowserTableCell {
+                            Button("Copy kubectl Command") {
+                                viewModel.copyInspectCommand(for: pod)
+                            }
+                        }
                 }
                 .width(70)
 
-                TableColumn("Restarts") { pod in
+                TableColumn("Restarts", value: \.restartCount) { pod in
                     Text("\(pod.restartCount)")
                         .foregroundStyle(.secondary)
+                        .clusterBrowserTableCell(alignment: .trailing) {
+                            Button("Copy kubectl Command") {
+                                viewModel.copyInspectCommand(for: pod)
+                            }
+                        }
                 }
                 .width(80)
 
-                TableColumn("Age") { pod in
+                TableColumn("Age", value: \.ageSortValue) { pod in
                     Text(Self.ageText(from: pod.createdAt))
                         .foregroundStyle(.secondary)
+                        .clusterBrowserTableCell {
+                            Button("Copy kubectl Command") {
+                                viewModel.copyInspectCommand(for: pod)
+                            }
+                        }
                 }
                 .width(70)
             }
             .tableStyle(.inset(alternatesRowBackgrounds: true))
 
         case .deployments:
-            Table(viewModel.filteredDeployments, selection: $viewModel.selectedResourceID) {
-                TableColumn("Name") { deployment in
+            Table(viewModel.filteredDeployments, selection: $viewModel.selectedResourceID, sortOrder: deploymentSortOrderBinding) {
+                TableColumn("Name", value: \.name) { deployment in
                     Text(deployment.name)
                         .font(.system(size: 12, weight: .regular, design: .monospaced))
+                        .clusterBrowserTableCell {
+                            Button("Copy kubectl Command") {
+                                viewModel.copyInspectCommand(for: deployment)
+                            }
+                        }
                 }
                 .width(min: 240, ideal: 280)
 
-                TableColumn("Ready") { deployment in
+                TableColumn("Ready", value: \.defaultHealthSortValue) { deployment in
                     Text(deployment.readyText)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(Self.color(for: deployment.healthBucket))
+                        .clusterBrowserTableCell {
+                            Button("Copy kubectl Command") {
+                                viewModel.copyInspectCommand(for: deployment)
+                            }
+                        }
                 }
                 .width(80)
 
-                TableColumn("Up-to-date") { deployment in
+                TableColumn("Up-to-date", value: \.updatedReplicas) { deployment in
                     Text("\(deployment.updatedReplicas)")
                         .foregroundStyle(.secondary)
+                        .clusterBrowserTableCell(alignment: .trailing) {
+                            Button("Copy kubectl Command") {
+                                viewModel.copyInspectCommand(for: deployment)
+                            }
+                        }
                 }
                 .width(90)
 
-                TableColumn("Available") { deployment in
+                TableColumn("Available", value: \.availableReplicas) { deployment in
                     Text("\(deployment.availableReplicas)")
                         .foregroundStyle(.secondary)
+                        .clusterBrowserTableCell(alignment: .trailing) {
+                            Button("Copy kubectl Command") {
+                                viewModel.copyInspectCommand(for: deployment)
+                            }
+                        }
                 }
                 .width(90)
 
-                TableColumn("Age") { deployment in
+                TableColumn("Age", value: \.ageSortValue) { deployment in
                     Text(Self.ageText(from: deployment.createdAt))
                         .foregroundStyle(.secondary)
+                        .clusterBrowserTableCell {
+                            Button("Copy kubectl Command") {
+                                viewModel.copyInspectCommand(for: deployment)
+                            }
+                        }
                 }
                 .width(70)
             }
             .tableStyle(.inset(alternatesRowBackgrounds: true))
 
         case .services:
-            Table(viewModel.filteredServices, selection: $viewModel.selectedResourceID) {
-                TableColumn("Name") { service in
+            Table(viewModel.filteredServices, selection: $viewModel.selectedResourceID, sortOrder: serviceSortOrderBinding) {
+                TableColumn("Name", value: \.name) { service in
                     Text(service.name)
                         .font(.system(size: 12, weight: .regular, design: .monospaced))
+                        .clusterBrowserTableCell {
+                            Button("Copy kubectl Command") {
+                                viewModel.copyInspectCommand(for: service)
+                            }
+                        }
                 }
                 .width(min: 220, ideal: 250)
 
-                TableColumn("Type") { service in
+                TableColumn("Type", value: \.type) { service in
                     Text(service.type)
                         .foregroundStyle(.secondary)
+                        .clusterBrowserTableCell {
+                            Button("Copy kubectl Command") {
+                                viewModel.copyInspectCommand(for: service)
+                            }
+                        }
                 }
                 .width(100)
 
-                TableColumn("Cluster IP") { service in
-                    Text(service.clusterIP ?? "\u{2014}")
+                TableColumn("Cluster IP", value: \.clusterIPSortValue) { service in
+                    Text(service.clusterIP ?? "-")
                         .foregroundStyle(.secondary)
+                        .clusterBrowserTableCell {
+                            Button("Copy kubectl Command") {
+                                viewModel.copyInspectCommand(for: service)
+                            }
+                        }
                 }
                 .width(min: 110, ideal: 140)
 
@@ -274,36 +330,70 @@ struct ClusterBrowserWindowView: View {
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                         .truncationMode(.middle)
+                        .clusterBrowserTableCell {
+                            Button("Copy kubectl Command") {
+                                viewModel.copyInspectCommand(for: service)
+                            }
+                        }
                 }
                 .width(min: 180, ideal: 220)
 
-                TableColumn("Age") { service in
+                TableColumn("Age", value: \.ageSortValue) { service in
                     Text(Self.ageText(from: service.createdAt))
                         .foregroundStyle(.secondary)
+                        .clusterBrowserTableCell {
+                            Button("Copy kubectl Command") {
+                                viewModel.copyInspectCommand(for: service)
+                            }
+                        }
                 }
                 .width(70)
             }
             .tableStyle(.inset(alternatesRowBackgrounds: true))
 
-        case .ingresses:
-            Table(viewModel.filteredIngresses, selection: $viewModel.selectedResourceID) {
-                TableColumn("Name") { ingress in
-                    Text(ingress.name)
+        case .configMaps:
+            Table(viewModel.filteredConfigMaps, selection: $viewModel.selectedResourceID, sortOrder: configMapSortOrderBinding) {
+                TableColumn("Name", value: \.name) { configMap in
+                    Text(configMap.name)
                         .font(.system(size: 12, weight: .regular, design: .monospaced))
+                        .clusterBrowserTableCell {
+                            Button("Copy kubectl Command") {
+                                viewModel.copyInspectCommand(for: configMap)
+                            }
+                        }
                 }
-                .width(min: 220, ideal: 250)
+                .width(min: 240, ideal: 280)
 
-                TableColumn("Hosts") { ingress in
-                    Text(ingress.hostsText)
+                TableColumn("Keys", value: \.dataKeyCount) { configMap in
+                    Text("\(configMap.dataKeyCount)")
                         .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
+                        .clusterBrowserTableCell(alignment: .trailing) {
+                            Button("Copy kubectl Command") {
+                                viewModel.copyInspectCommand(for: configMap)
+                            }
+                        }
                 }
-                .width(min: 280, ideal: 360)
+                .width(70)
 
-                TableColumn("Age") { ingress in
-                    Text(Self.ageText(from: ingress.createdAt))
+                TableColumn("Immutable", value: \.immutableSortValue) { configMap in
+                    Text(configMap.immutableText)
                         .foregroundStyle(.secondary)
+                        .clusterBrowserTableCell {
+                            Button("Copy kubectl Command") {
+                                viewModel.copyInspectCommand(for: configMap)
+                            }
+                        }
+                }
+                .width(90)
+
+                TableColumn("Age", value: \.ageSortValue) { configMap in
+                    Text(Self.ageText(from: configMap.createdAt))
+                        .foregroundStyle(.secondary)
+                        .clusterBrowserTableCell {
+                            Button("Copy kubectl Command") {
+                                viewModel.copyInspectCommand(for: configMap)
+                            }
+                        }
                 }
                 .width(70)
             }
@@ -346,13 +436,77 @@ struct ClusterBrowserWindowView: View {
                 ProgressView()
                     .controlSize(.large)
 
-                Text("Loading \(viewModel.selectedResourceType.title.lowercased())…")
+                Text("Loading \(viewModel.selectedResourceType.title.lowercased())...")
                     .font(.system(size: 13, weight: .regular))
                     .foregroundStyle(.secondary)
             }
         } else {
             EmptyView()
         }
+    }
+
+    private var statusBar: some View {
+        VStack(spacing: 0) {
+            Rectangle()
+                .fill(Color(nsColor: .separatorColor))
+                .frame(height: 0.5)
+
+            HStack(spacing: 12) {
+                Text(viewModel.statusBarCountText)
+                    .font(.system(size: 11, weight: .regular))
+                    .foregroundStyle(.secondary)
+
+                Spacer(minLength: 0)
+
+                Text(viewModel.statusBarContextText)
+                    .font(.system(size: 11, weight: .regular, design: .monospaced))
+                    .foregroundStyle(.secondary)
+
+                Text(viewModel.statusBarNamespaceText)
+                    .font(.system(size: 11, weight: .regular, design: .monospaced))
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
+        }
+    }
+
+    private var copyCommandShortcutButton: some View {
+        Button(action: viewModel.copySelectedResourceCommand) {
+            EmptyView()
+        }
+        .keyboardShortcut("c", modifiers: [.command, .shift])
+        .disabled(viewModel.canCopySelectedResourceCommand == false)
+        .frame(width: 0, height: 0)
+        .opacity(0.001)
+    }
+
+    private var podSortOrderBinding: Binding<[KeyPathComparator<PodResource>]> {
+        Binding(
+            get: { viewModel.podTableSortOrder },
+            set: { viewModel.podTableSortOrder = $0 }
+        )
+    }
+
+    private var deploymentSortOrderBinding: Binding<[KeyPathComparator<DeploymentResource>]> {
+        Binding(
+            get: { viewModel.deploymentTableSortOrder },
+            set: { viewModel.deploymentTableSortOrder = $0 }
+        )
+    }
+
+    private var serviceSortOrderBinding: Binding<[KeyPathComparator<ServiceResource>]> {
+        Binding(
+            get: { viewModel.serviceTableSortOrder },
+            set: { viewModel.serviceTableSortOrder = $0 }
+        )
+    }
+
+    private var configMapSortOrderBinding: Binding<[KeyPathComparator<ConfigMapResource>]> {
+        Binding(
+            get: { viewModel.configMapTableSortOrder },
+            set: { viewModel.configMapTableSortOrder = $0 }
+        )
     }
 
     private static func tabShortcut(for index: Int) -> KeyEquivalent {
@@ -370,7 +524,7 @@ struct ClusterBrowserWindowView: View {
 
     private static func ageText(from date: Date?) -> String {
         guard let date else {
-            return "\u{2014}"
+            return "-"
         }
 
         let interval = max(0, Int(Date().timeIntervalSince(date)))
@@ -384,6 +538,19 @@ struct ClusterBrowserWindowView: View {
             return "\(interval / 3600)h"
         }
         return "\(interval / 86_400)d"
+    }
+
+    private static func color(for healthBucket: ResourceHealthBucket) -> Color {
+        switch healthBucket {
+        case .healthy:
+            return Color.green
+        case .transitional:
+            return Color.yellow
+        case .unhealthy:
+            return Color.red
+        case .neutral:
+            return Color.secondary
+        }
     }
 }
 
@@ -437,23 +604,6 @@ private struct ClusterNamespacePicker: View {
     }
 }
 
-private struct ClusterInfoBadge: View {
-    let label: String
-    let value: String
-
-    var body: some View {
-        HStack(spacing: 6) {
-            Text(label.uppercased())
-                .font(.system(size: 10, weight: .medium))
-                .foregroundStyle(.tertiary)
-
-            Text(value)
-                .font(.system(size: 11, weight: .regular, design: .monospaced))
-                .foregroundStyle(.secondary)
-        }
-    }
-}
-
 private struct ClusterBrowserInlineErrorBanner: View {
     let message: String
     let retry: () -> Void
@@ -501,5 +651,16 @@ private struct ClusterBrowserWindowConfigurator: NSViewRepresentable {
             window.level = .floating
             window.standardWindowButton(.zoomButton)?.isHidden = true
         }
+    }
+}
+
+private extension View {
+    func clusterBrowserTableCell<MenuItems: View>(
+        alignment: Alignment = .leading,
+        @ViewBuilder menu: () -> MenuItems
+    ) -> some View {
+        frame(maxWidth: .infinity, maxHeight: .infinity, alignment: alignment)
+            .contentShape(Rectangle())
+            .contextMenu(menuItems: menu)
     }
 }

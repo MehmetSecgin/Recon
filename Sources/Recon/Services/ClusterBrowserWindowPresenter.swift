@@ -27,6 +27,7 @@ enum ClusterBrowserWindowPresenter {
         window.identifier = NSUserInterfaceItemIdentifier(AppWindowID.cluster)
         window.collectionBehavior.insert(.fullScreenAuxiliary)
         window.collectionBehavior.insert(.moveToActiveSpace)
+        window.setFrameAutosaveName(AppWindowID.cluster)
     }
 
     private static var clusterWindow: NSWindow? {

@@ -48,8 +48,8 @@ struct ReconApp: App {
         Window("Recon — Cluster", id: AppWindowID.cluster) {
             ClusterBrowserWindowSceneView(settingsStore: settingsStore)
         }
-        .defaultSize(width: 720, height: 520)
-        .windowResizability(.contentSize)
+        .defaultSize(width: 960, height: 700)
+        .windowResizability(.contentMinSize)
     }
 }
 

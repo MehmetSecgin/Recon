@@ -4,7 +4,7 @@ enum ResourceType: String, CaseIterable, Hashable {
     case pods
     case deployments
     case services
-    case ingresses
+    case configMaps
 
     var title: String {
         switch self {
@@ -14,8 +14,8 @@ enum ResourceType: String, CaseIterable, Hashable {
             return "Deployments"
         case .services:
             return "Services"
-        case .ingresses:
-            return "Ingresses"
+        case .configMaps:
+            return "ConfigMaps"
         }
     }
 
@@ -27,8 +27,21 @@ enum ResourceType: String, CaseIterable, Hashable {
             return "deployment"
         case .services:
             return "service"
-        case .ingresses:
-            return "ingress"
+        case .configMaps:
+            return "configmap"
+        }
+    }
+
+    var pluralTitleForStatusBar: String {
+        switch self {
+        case .pods:
+            return "pods"
+        case .deployments:
+            return "deployments"
+        case .services:
+            return "services"
+        case .configMaps:
+            return "configmaps"
         }
     }
 
@@ -40,17 +53,17 @@ enum ResourceType: String, CaseIterable, Hashable {
             return "square.stack.3d.up"
         case .services:
             return "point.3.connected.trianglepath.dotted"
-        case .ingresses:
-            return "network"
+        case .configMaps:
+            return "switch.2"
         }
     }
 
     var emptyStateTitle: String {
-        "No \(title.lowercased())"
+        "No \(pluralTitleForStatusBar)"
     }
 
     func emptyStateDescription(namespace: String) -> String {
-        "No \(title.lowercased()) found in namespace `\(namespace)`."
+        "No \(pluralTitleForStatusBar) found in namespace `\(namespace)`."
     }
 }
 
@@ -59,7 +72,7 @@ enum LoadedResources {
     case pods([PodResource])
     case deployments([DeploymentResource])
     case services([ServiceResource])
-    case ingresses([IngressResource])
+    case configMaps([ConfigMapResource])
 
     var isEmpty: Bool {
         switch self {
@@ -71,7 +84,7 @@ enum LoadedResources {
             return resources.isEmpty
         case .services(let resources):
             return resources.isEmpty
-        case .ingresses(let resources):
+        case .configMaps(let resources):
             return resources.isEmpty
         }
     }
@@ -91,22 +104,74 @@ enum PodPhase: String, Decodable, Hashable {
     }
 }
 
+enum ResourceHealthBucket: Int, Comparable, Hashable {
+    case unhealthy = 0
+    case transitional = 1
+    case healthy = 2
+    case neutral = 3
+
+    static func < (lhs: ResourceHealthBucket, rhs: ResourceHealthBucket) -> Bool {
+        lhs.rawValue < rhs.rawValue
+    }
+}
+
 struct PodResource: Identifiable, Hashable {
     let id: String
     let name: String
     let namespace: String
     let phase: PodPhase
+    let statusReason: String?
     let readyCount: Int
     let totalCount: Int
     let restartCount: Int
     let createdAt: Date?
 
-    var statusText: String {
-        phase.rawValue
+    var displayStatusText: String {
+        statusReason ?? phase.rawValue
     }
 
     var readyText: String {
         "\(readyCount)/\(totalCount)"
+    }
+
+    var healthBucket: ResourceHealthBucket {
+        if phase == .succeeded {
+            return .neutral
+        }
+
+        if phase == .failed || statusReason == "CrashLoopBackOff" || statusReason == "CreateContainerConfigError" {
+            return .unhealthy
+        }
+
+        if statusReason == "ImagePullBackOff" || phase == .pending || phase == .unknown {
+            return .transitional
+        }
+
+        if phase == .running, statusReason == nil, totalCount > 0, readyCount == totalCount {
+            return .healthy
+        }
+
+        if readyCount < totalCount {
+            return .transitional
+        }
+
+        return .healthy
+    }
+
+    var statusSortValue: Int {
+        healthBucket.rawValue
+    }
+
+    var readySortValue: Double {
+        guard totalCount > 0 else {
+            return readyCount > 0 ? 1 : 0
+        }
+
+        return Double(readyCount) / Double(totalCount)
+    }
+
+    var ageSortValue: Date {
+        createdAt ?? .distantPast
     }
 }
 
@@ -122,6 +187,40 @@ struct DeploymentResource: Identifiable, Hashable {
 
     var readyText: String {
         "\(readyReplicas)/\(desiredReplicas)"
+    }
+
+    var healthBucket: ResourceHealthBucket {
+        if desiredReplicas == 0 {
+            return .neutral
+        }
+
+        if availableReplicas == 0 {
+            return .unhealthy
+        }
+
+        if readyReplicas == desiredReplicas,
+           updatedReplicas == desiredReplicas,
+           availableReplicas == desiredReplicas {
+            return .healthy
+        }
+
+        return .transitional
+    }
+
+    var defaultHealthSortValue: Int {
+        healthBucket.rawValue
+    }
+
+    var readySortValue: Double {
+        guard desiredReplicas > 0 else {
+            return readyReplicas > 0 ? 1 : 0
+        }
+
+        return Double(readyReplicas) / Double(desiredReplicas)
+    }
+
+    var ageSortValue: Date {
+        createdAt ?? .distantPast
     }
 }
 
@@ -151,25 +250,56 @@ struct ServiceResource: Identifiable, Hashable {
 
     var portsText: String {
         if ports.isEmpty {
-            return "\u{2014}"
+            return "-"
         }
 
         return ports.map(\.displayValue).joined(separator: ", ")
     }
+
+    var clusterIPSortValue: String {
+        clusterIP ?? ""
+    }
+
+    var ageSortValue: Date {
+        createdAt ?? .distantPast
+    }
 }
 
-struct IngressResource: Identifiable, Hashable {
+struct ConfigMapResource: Identifiable, Hashable {
     let id: String
     let name: String
     let namespace: String
-    let hosts: [String]
+    let dataKeyCount: Int
+    let isImmutable: Bool
     let createdAt: Date?
 
-    var hostsText: String {
-        if hosts.isEmpty {
-            return "\u{2014}"
-        }
+    var immutableText: String {
+        isImmutable ? "Yes" : "No"
+    }
 
-        return hosts.joined(separator: ", ")
+    var immutableSortValue: Int {
+        isImmutable ? 1 : 0
+    }
+
+    var ageSortValue: Date {
+        createdAt ?? .distantPast
+    }
+}
+
+enum ClusterBrowserInspectCommandBuilder {
+    static func pod(name: String, namespace: String) -> String {
+        "kubectl get pod \(name) -n \(namespace)"
+    }
+
+    static func deployment(name: String, namespace: String) -> String {
+        "kubectl get deployment \(name) -n \(namespace)"
+    }
+
+    static func service(name: String, namespace: String) -> String {
+        "kubectl get service \(name) -n \(namespace)"
+    }
+
+    static func configMap(name: String, namespace: String) -> String {
+        "kubectl get configmap \(name) -n \(namespace)"
     }
 }

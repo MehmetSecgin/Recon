@@ -100,25 +100,6 @@ actor KubeResourceService {
         let spec: Spec?
     }
 
-    private struct IngressListItem: Decodable {
-        struct Metadata: Decodable {
-            let name: String
-            let namespace: String?
-            let creationTimestamp: Date?
-        }
-
-        struct Spec: Decodable {
-            struct Rule: Decodable {
-                let host: String?
-            }
-
-            let rules: [Rule]?
-        }
-
-        let metadata: Metadata
-        let spec: Spec?
-    }
-
     private let environmentResolver: CommandEnvironmentResolver
     private let decoder: JSONDecoder
     private let kubectlFallbackPaths = [
@@ -135,7 +116,7 @@ actor KubeResourceService {
             let container = try decoder.singleValueContainer()
             let rawValue = try container.decode(String.self)
 
-            if let date = Self.parseKubernetesTimestamp(rawValue) {
+            if let date = KubernetesTimestampParser.parse(rawValue) {
                 return date
             }
 
@@ -150,15 +131,42 @@ actor KubeResourceService {
     func fetchPods(namespace: String) async throws -> [PodResource] {
         let items: [PodListItem] = try await fetchItems(resource: "pods", namespace: namespace)
 
-        return items.map { item in
+        return mapPods(items, namespace: namespace)
+    }
+
+    func fetchDeployments(namespace: String) async throws -> [DeploymentResource] {
+        let items: [DeploymentListItem] = try await fetchItems(resource: "deployments", namespace: namespace)
+
+        return mapDeployments(items, namespace: namespace)
+    }
+
+    func fetchServices(namespace: String) async throws -> [ServiceResource] {
+        let items: [ServiceListItem] = try await fetchItems(resource: "services", namespace: namespace)
+
+        return mapServices(items, namespace: namespace)
+    }
+
+    func fetchConfigMaps(namespace: String) async throws -> [ConfigMapResource] {
+        let data = try await fetchJSON(resource: "configmaps", namespace: namespace)
+        return try ConfigMapResourceDecoder.decode(from: data, defaultNamespace: namespace)
+    }
+
+    func decodeConfigMaps(from data: Data, namespace: String) throws -> [ConfigMapResource] {
+        try ConfigMapResourceDecoder.decode(from: data, defaultNamespace: namespace)
+    }
+
+    private func mapPods(_ items: [PodListItem], namespace: String) -> [PodResource] {
+        items.map { item in
             let namespaceName = item.metadata.namespace ?? namespace
             let containerStatuses = item.status?.containerStatuses ?? []
+            let waitingReasons = containerStatuses.map { $0.state?.waiting?.reason }
 
             return PodResource(
                 id: "pod:\(namespaceName):\(item.metadata.name)",
                 name: item.metadata.name,
                 namespace: namespaceName,
                 phase: item.status?.phase ?? .unknown,
+                statusReason: PodStatusReasonDeriver.derive(from: waitingReasons),
                 readyCount: containerStatuses.reduce(0) { count, status in
                     count + ((status.ready ?? false) ? 1 : 0)
                 },
@@ -171,10 +179,8 @@ actor KubeResourceService {
         }
     }
 
-    func fetchDeployments(namespace: String) async throws -> [DeploymentResource] {
-        let items: [DeploymentListItem] = try await fetchItems(resource: "deployments", namespace: namespace)
-
-        return items.map { item in
+    private func mapDeployments(_ items: [DeploymentListItem], namespace: String) -> [DeploymentResource] {
+        items.map { item in
             let namespaceName = item.metadata.namespace ?? namespace
 
             return DeploymentResource(
@@ -190,10 +196,8 @@ actor KubeResourceService {
         }
     }
 
-    func fetchServices(namespace: String) async throws -> [ServiceResource] {
-        let items: [ServiceListItem] = try await fetchItems(resource: "services", namespace: namespace)
-
-        return items.map { item in
+    private func mapServices(_ items: [ServiceListItem], namespace: String) -> [ServiceResource] {
+        items.map { item in
             let namespaceName = item.metadata.namespace ?? namespace
 
             return ServiceResource(
@@ -214,27 +218,16 @@ actor KubeResourceService {
         }
     }
 
-    func fetchIngresses(namespace: String) async throws -> [IngressResource] {
-        let items: [IngressListItem] = try await fetchItems(resource: "ingresses", namespace: namespace)
-
-        return items.map { item in
-            let namespaceName = item.metadata.namespace ?? namespace
-            let hosts = (item.spec?.rules ?? [])
-                .compactMap(\.host)
-                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-                .filter { $0.isEmpty == false }
-
-            return IngressResource(
-                id: "ingress:\(namespaceName):\(item.metadata.name)",
-                name: item.metadata.name,
-                namespace: namespaceName,
-                hosts: hosts,
-                createdAt: item.metadata.creationTimestamp
-            )
+    private func fetchItems<Item: Decodable>(resource: String, namespace: String) async throws -> [Item] {
+        let data = try await fetchJSON(resource: resource, namespace: namespace)
+        do {
+            return try decoder.decode(ResourceListResponse<Item>.self, from: data).items
+        } catch {
+            throw KubeResourceReadError.invalidResponse("Couldn't decode the cluster response.")
         }
     }
 
-    private func fetchItems<Item: Decodable>(resource: String, namespace: String) async throws -> [Item] {
+    private func fetchJSON(resource: String, namespace: String) async throws -> Data {
         let kubectl = await environmentResolver.resolveExecutable(
             named: "kubectl",
             envKey: "KUBECTL_PATH",
@@ -259,12 +252,7 @@ actor KubeResourceService {
                 )
             }
 
-            let data = Data(result.stdout.utf8)
-            do {
-                return try decoder.decode(ResourceListResponse<Item>.self, from: data).items
-            } catch {
-                throw KubeResourceReadError.invalidResponse("Couldn't decode the cluster response.")
-            }
+            return Data(result.stdout.utf8)
         } catch is ProcessRunner.TimeoutError {
             throw KubeResourceReadError.timedOut
         } catch let error as KubeResourceReadError {
@@ -283,16 +271,4 @@ actor KubeResourceService {
         return firstLine ?? fallback
     }
 
-    private static func parseKubernetesTimestamp(_ rawValue: String) -> Date? {
-        let withFractionalSeconds = ISO8601DateFormatter()
-        withFractionalSeconds.formatOptions = [
-            .withInternetDateTime,
-            .withFractionalSeconds
-        ]
-
-        let withoutFractionalSeconds = ISO8601DateFormatter()
-        withoutFractionalSeconds.formatOptions = [.withInternetDateTime]
-
-        return withFractionalSeconds.date(from: rawValue) ?? withoutFractionalSeconds.date(from: rawValue)
-    }
 }
