@@ -42,7 +42,6 @@ enum ServiceSortMode: Hashable {
 enum ConfigMapSortMode: Hashable {
     case name(ClusterBrowserSortDirection)
     case keyCount(ClusterBrowserSortDirection)
-    case immutable(ClusterBrowserSortDirection)
     case age(ClusterBrowserSortDirection)
 }
 
@@ -143,15 +142,11 @@ enum ClusterBrowserSorting {
             switch mode {
             case .name(let direction):
                 return compare(lhs.name, rhs.name, direction: direction, fallback: {
-                    compare(lhs.dataKeyCount, rhs.dataKeyCount, lhs.immutableSortValue, rhs.immutableSortValue)
+                    compare(lhs.dataKeyCount, rhs.dataKeyCount, lhs.ageSortValue, rhs.ageSortValue)
                 })
             case .keyCount(let direction):
                 return compare(lhs.dataKeyCount, rhs.dataKeyCount, direction: direction, fallback: {
-                    compare(lhs.name, rhs.name, lhs.immutableSortValue, rhs.immutableSortValue)
-                })
-            case .immutable(let direction):
-                return compare(lhs.immutableSortValue, rhs.immutableSortValue, direction: direction, fallback: {
-                    compare(lhs.name, rhs.name, lhs.dataKeyCount, rhs.dataKeyCount)
+                    compare(lhs.name, rhs.name, lhs.ageSortValue, rhs.ageSortValue)
                 })
             case .age(let direction):
                 return compare(lhs.ageSortValue, rhs.ageSortValue, direction: direction, fallback: {

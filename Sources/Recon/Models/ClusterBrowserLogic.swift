@@ -1,27 +1,56 @@
 import Foundation
 
-enum PodStatusReasonDeriver {
-    static func derive(from waitingReasons: [String?]) -> String? {
-        let normalizedReasons = waitingReasons
-            .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { $0.isEmpty == false }
-
-        guard normalizedReasons.isEmpty == false else {
-            return nil
+enum PodStatusTextNormalizer {
+    static func normalize(_ rawStatus: String) -> String {
+        let trimmed = rawStatus.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.isEmpty == false else {
+            return "Unknown"
         }
 
-        if normalizedReasons.contains("CrashLoopBackOff") {
-            return "CrashLoopBackOff"
-        }
-
-        if normalizedReasons.contains("ImagePullBackOff") || normalizedReasons.contains("ErrImagePull") {
+        switch trimmed {
+        case "ErrImagePull":
             return "ImagePullBackOff"
-        }
-
-        if normalizedReasons.contains("CreateContainerConfigError") {
+        case "Completed":
+            return "Completed"
+        case "CrashLoopBackOff":
+            return "CrashLoopBackOff"
+        case "ImagePullBackOff":
+            return "ImagePullBackOff"
+        case "CreateContainerConfigError":
             return "CreateContainerConfigError"
+        case "Running":
+            return "Running"
+        case "Pending":
+            return "Pending"
+        case "Unknown":
+            return "Unknown"
+        default:
+            return trimmed
         }
+    }
 
-        return normalizedReasons.first
+    static func healthBucket(
+        for statusText: String,
+        readyCount: Int,
+        totalCount: Int
+    ) -> ResourceHealthBucket {
+        switch normalize(statusText) {
+        case "Completed":
+            return .neutral
+        case "CrashLoopBackOff", "CreateContainerConfigError", "Error", "Failed":
+            return .unhealthy
+        case "ImagePullBackOff", "Pending", "Unknown":
+            return .transitional
+        case "Running":
+            if totalCount > 0, readyCount == totalCount {
+                return .healthy
+            }
+            return .transitional
+        default:
+            if totalCount > 0, readyCount == totalCount {
+                return .healthy
+            }
+            return .transitional
+        }
     }
 }

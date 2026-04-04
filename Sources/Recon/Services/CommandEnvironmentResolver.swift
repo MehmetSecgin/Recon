@@ -166,7 +166,8 @@ actor CommandEnvironmentResolver {
             let shell = ProcessInfo.processInfo.environment["SHELL"]?.nilIfEmpty ?? "/bin/zsh"
             let result = try await ProcessRunner.run(
                 executable: shell,
-                arguments: ["-lc", "env"]
+                arguments: ["-lc", "env"],
+                metadata: ProcessRunMetadata(source: .environmentProbe)
             )
 
             guard result.exitCode == 0 else {

@@ -1,19 +1,6 @@
 import Foundation
 
 actor KubeTargetResolver {
-    private struct KubectlConfigView: Decodable {
-        struct ContextEntry: Decodable {
-            struct ContextDetails: Decodable {
-                let namespace: String?
-            }
-
-            let name: String
-            let context: ContextDetails
-        }
-
-        let contexts: [ContextEntry]
-    }
-
     private let environmentResolver: CommandEnvironmentResolver
 
     init(environmentResolver: CommandEnvironmentResolver) {
@@ -49,44 +36,28 @@ actor KubeTargetResolver {
         var resolutionError: String?
 
         do {
-            let contextResult = try await ProcessRunner.run(
-                executable: kubectl,
-                arguments: ["config", "current-context"],
-                environment: environment
-            )
-
-            if contextResult.exitCode == 0 {
-                context = contextResult.stdout.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
-            } else {
-                resolutionError = summarize(output: contextResult.combinedOutput, fallback: "Couldn't read the current context.")
-            }
-        } catch {
-            resolutionError = error.localizedDescription
-        }
-
-        do {
             let configViewResult = try await ProcessRunner.run(
                 executable: kubectl,
-                arguments: ["config", "view", "--minify", "-o", "json"],
-                environment: environment
+                arguments: [
+                    "config",
+                    "view",
+                    "--minify",
+                    "-o",
+                    #"jsonpath={.current-context}{"\t"}{.contexts[0].context.namespace}"#
+                ],
+                environment: environment,
+                metadata: ProcessRunMetadata(source: .kubeTargetResolution)
             )
 
             if configViewResult.exitCode == 0 {
-                let data = Data(configViewResult.stdout.utf8)
-                let config = try JSONDecoder().decode(KubectlConfigView.self, from: data)
-                if let context {
-                    let activeNamespace = config.contexts
-                        .first(where: { $0.name == context })?
-                        .context.namespace
-                    namespace = activeNamespace?.nilIfEmpty ?? "default"
-                }
-            } else if resolutionError == nil {
+                let fields = KubectlConfigOutputParsing.parseTargetFields(from: configViewResult.stdout)
+                context = fields.context
+                namespace = fields.namespace?.nilIfEmpty
+            } else {
                 resolutionError = summarize(output: configViewResult.combinedOutput, fallback: "Couldn't read kubeconfig details.")
             }
         } catch {
-            if resolutionError == nil {
-                resolutionError = error.localizedDescription
-            }
+            resolutionError = error.localizedDescription
         }
 
         if context != nil, namespace == nil {

@@ -96,7 +96,7 @@ Make the browser immediately useful for “what is wrong?” workflows before ad
 
 ### Deliverables
 
-- Pod `statusReason` derivation
+- Pod status-text normalization from kubectl table output
 - Health color/status logic for pods and deployments
 - Unhealthy-first ordering for pods and deployments
 - Name-only fallback sorting for services and ingresses

@@ -1,19 +1,6 @@
 import Foundation
 
 actor BrowserConfigService {
-    private struct KubeconfigViewResponse: Decodable {
-        struct ContextEntry: Decodable {
-            struct ContextDetails: Decodable {
-                let namespace: String?
-            }
-
-            let name: String
-            let context: ContextDetails
-        }
-
-        let contexts: [ContextEntry]
-    }
-
     private let settingsStore: AppSettingsStore
     private let environmentResolver: CommandEnvironmentResolver
     private let fileManager = FileManager.default
@@ -67,8 +54,16 @@ actor BrowserConfigService {
             do {
                 let result = try await runKubectl(
                     executable: kubectl,
-                    arguments: ["config", "view", "--kubeconfig", path, "-o", "json"],
-                    timeout: .seconds(5)
+                    arguments: [
+                        "config",
+                        "view",
+                        "--kubeconfig",
+                        path,
+                        "-o",
+                        #"jsonpath={range .contexts[*]}{.name}{"\t"}{.context.namespace}{"\n"}{end}"#
+                    ],
+                    timeout: .seconds(5),
+                    metadata: ProcessRunMetadata(source: .clusterBrowser)
                 )
 
                 guard result.exitCode == 0 else {
@@ -83,15 +78,13 @@ actor BrowserConfigService {
                     continue
                 }
 
-                let data = Data(result.stdout.utf8)
-                let decoded = try JSONDecoder().decode(KubeconfigViewResponse.self, from: data)
-                let descriptors = decoded.contexts.map { entry in
+                let descriptors = KubectlConfigOutputParsing.parseContextEntries(from: result.stdout).map { entry in
                     BrowserContextDescriptor(
                         id: BrowserContextIdentity.makeID(contextName: entry.name, sourcePath: path),
                         name: entry.name,
                         sourcePath: path,
                         sourceBadge: nil,
-                        defaultNamespace: entry.context.namespace?.nilIfEmpty,
+                        defaultNamespace: entry.namespace?.nilIfEmpty,
                         isProductionLike: ProductionDetector.isProduction(context: entry.name)
                     )
                 }
@@ -134,9 +127,10 @@ actor BrowserConfigService {
             executable: kubectl,
             arguments: browserScopedArguments(
                 for: context,
-                command: ["get", "namespaces", "-o", "jsonpath={.items[*].metadata.name}"]
+                command: ["--request-timeout=5s", "get", "namespaces", "-o", "jsonpath={.items[*].metadata.name}"]
             ),
-            timeout: .seconds(5)
+            timeout: .seconds(5),
+            metadata: ProcessRunMetadata(source: .clusterBrowser, context: context.name)
         )
 
         guard result.exitCode == 0 else {
@@ -174,7 +168,12 @@ actor BrowserConfigService {
         return try await runKubectl(
             executable: kubectl,
             arguments: browserScopedArguments(for: context, command: command),
-            timeout: timeout
+            timeout: timeout,
+            metadata: ProcessRunMetadata(
+                source: .clusterBrowser,
+                context: context.name,
+                namespace: commandNamespace(in: command) ?? context.defaultNamespace
+            )
         )
     }
 
@@ -202,7 +201,8 @@ actor BrowserConfigService {
     private func runKubectl(
         executable: String,
         arguments: [String],
-        timeout: Duration
+        timeout: Duration,
+        metadata: ProcessRunMetadata
     ) async throws -> ProcessOutput {
         do {
             var environment = await environmentResolver.executionEnvironment()
@@ -212,7 +212,8 @@ actor BrowserConfigService {
                 executable: executable,
                 arguments: arguments,
                 environment: environment,
-                timeout: timeout
+                timeout: timeout,
+                metadata: metadata
             )
         } catch is ProcessRunner.TimeoutError {
             throw BrowserConfigError.timedOut
@@ -225,6 +226,20 @@ actor BrowserConfigService {
 
     private func browserScopedArguments(for context: BrowserContextDescriptor, command: [String]) -> [String] {
         ["--kubeconfig", context.sourcePath, "--context", context.name] + command
+    }
+
+    private func commandNamespace(in command: [String]) -> String? {
+        if let namespaceIndex = command.firstIndex(of: "--namespace"),
+           command.indices.contains(namespaceIndex + 1) {
+            return command[namespaceIndex + 1].nilIfEmpty
+        }
+
+        if let namespaceIndex = command.firstIndex(of: "-n"),
+           command.indices.contains(namespaceIndex + 1) {
+            return command[namespaceIndex + 1].nilIfEmpty
+        }
+
+        return nil
     }
 
     private func makeContexts(from descriptorsByPath: [String: [BrowserContextDescriptor]]) -> [BrowserContextDescriptor] {

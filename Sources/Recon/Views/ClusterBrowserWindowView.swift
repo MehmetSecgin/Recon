@@ -337,7 +337,7 @@ struct ClusterBrowserWindowView: View {
                 .width(80)
 
                 TableColumn("Age", value: \.ageSortValue) { pod in
-                    Text(Self.ageText(from: pod.createdAt))
+                    Text(pod.ageText)
                         .foregroundStyle(.secondary)
                         .clusterBrowserTableCell {
                             Button("Copy kubectl Command") {
@@ -396,7 +396,7 @@ struct ClusterBrowserWindowView: View {
                 .width(90)
 
                 TableColumn("Age", value: \.ageSortValue) { deployment in
-                    Text(Self.ageText(from: deployment.createdAt))
+                    Text(deployment.ageText)
                         .foregroundStyle(.secondary)
                         .clusterBrowserTableCell {
                             Button("Copy kubectl Command") {
@@ -457,7 +457,7 @@ struct ClusterBrowserWindowView: View {
                 .width(min: 180, ideal: 220)
 
                 TableColumn("Age", value: \.ageSortValue) { service in
-                    Text(Self.ageText(from: service.createdAt))
+                    Text(service.ageText)
                         .foregroundStyle(.secondary)
                         .clusterBrowserTableCell {
                             Button("Copy kubectl Command") {
@@ -493,19 +493,8 @@ struct ClusterBrowserWindowView: View {
                 }
                 .width(70)
 
-                TableColumn("Immutable", value: \.immutableSortValue) { configMap in
-                    Text(configMap.immutableText)
-                        .foregroundStyle(.secondary)
-                        .clusterBrowserTableCell {
-                            Button("Copy kubectl Command") {
-                                viewModel.copyInspectCommand(for: configMap)
-                            }
-                        }
-                }
-                .width(90)
-
                 TableColumn("Age", value: \.ageSortValue) { configMap in
-                    Text(Self.ageText(from: configMap.createdAt))
+                    Text(configMap.ageText)
                         .foregroundStyle(.secondary)
                         .clusterBrowserTableCell {
                             Button("Copy kubectl Command") {
@@ -656,24 +645,6 @@ struct ClusterBrowserWindowView: View {
         default:
             return "4"
         }
-    }
-
-    private static func ageText(from date: Date?) -> String {
-        guard let date else {
-            return "-"
-        }
-
-        let interval = max(0, Int(Date().timeIntervalSince(date)))
-        if interval < 60 {
-            return "\(interval)s"
-        }
-        if interval < 3600 {
-            return "\(interval / 60)m"
-        }
-        if interval < 86_400 {
-            return "\(interval / 3600)h"
-        }
-        return "\(interval / 86_400)d"
     }
 
     private static func color(for healthBucket: ResourceHealthBucket) -> Color {

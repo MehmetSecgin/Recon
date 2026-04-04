@@ -90,20 +90,6 @@ enum LoadedResources {
     }
 }
 
-enum PodPhase: String, Decodable, Hashable {
-    case running = "Running"
-    case pending = "Pending"
-    case succeeded = "Succeeded"
-    case failed = "Failed"
-    case unknown = "Unknown"
-
-    init(from decoder: Decoder) throws {
-        let container = try decoder.singleValueContainer()
-        let rawValue = try container.decode(String.self)
-        self = PodPhase(rawValue: rawValue) ?? .unknown
-    }
-}
-
 enum ResourceHealthBucket: Int, Comparable, Hashable {
     case unhealthy = 0
     case transitional = 1
@@ -119,15 +105,15 @@ struct PodResource: Identifiable, Hashable {
     let id: String
     let name: String
     let namespace: String
-    let phase: PodPhase
-    let statusReason: String?
+    let statusText: String
     let readyCount: Int
     let totalCount: Int
     let restartCount: Int
-    let createdAt: Date?
+    let ageText: String
+    let ageSortValue: Int
 
     var displayStatusText: String {
-        statusReason ?? phase.rawValue
+        statusText
     }
 
     var readyText: String {
@@ -135,27 +121,11 @@ struct PodResource: Identifiable, Hashable {
     }
 
     var healthBucket: ResourceHealthBucket {
-        if phase == .succeeded {
-            return .neutral
-        }
-
-        if phase == .failed || statusReason == "CrashLoopBackOff" || statusReason == "CreateContainerConfigError" {
-            return .unhealthy
-        }
-
-        if statusReason == "ImagePullBackOff" || phase == .pending || phase == .unknown {
-            return .transitional
-        }
-
-        if phase == .running, statusReason == nil, totalCount > 0, readyCount == totalCount {
-            return .healthy
-        }
-
-        if readyCount < totalCount {
-            return .transitional
-        }
-
-        return .healthy
+        PodStatusTextNormalizer.healthBucket(
+            for: statusText,
+            readyCount: readyCount,
+            totalCount: totalCount
+        )
     }
 
     var statusSortValue: Int {
@@ -169,10 +139,6 @@ struct PodResource: Identifiable, Hashable {
 
         return Double(readyCount) / Double(totalCount)
     }
-
-    var ageSortValue: Date {
-        createdAt ?? .distantPast
-    }
 }
 
 struct DeploymentResource: Identifiable, Hashable {
@@ -183,7 +149,8 @@ struct DeploymentResource: Identifiable, Hashable {
     let desiredReplicas: Int
     let updatedReplicas: Int
     let availableReplicas: Int
-    let createdAt: Date?
+    let ageText: String
+    let ageSortValue: Int
 
     var readyText: String {
         "\(readyReplicas)/\(desiredReplicas)"
@@ -218,10 +185,6 @@ struct DeploymentResource: Identifiable, Hashable {
 
         return Double(readyReplicas) / Double(desiredReplicas)
     }
-
-    var ageSortValue: Date {
-        createdAt ?? .distantPast
-    }
 }
 
 struct ServicePort: Hashable {
@@ -245,23 +208,12 @@ struct ServiceResource: Identifiable, Hashable {
     let namespace: String
     let type: String
     let clusterIP: String?
-    let ports: [ServicePort]
-    let createdAt: Date?
-
-    var portsText: String {
-        if ports.isEmpty {
-            return "-"
-        }
-
-        return ports.map(\.displayValue).joined(separator: ", ")
-    }
+    let portsText: String
+    let ageText: String
+    let ageSortValue: Int
 
     var clusterIPSortValue: String {
         clusterIP ?? ""
-    }
-
-    var ageSortValue: Date {
-        createdAt ?? .distantPast
     }
 }
 
@@ -270,20 +222,8 @@ struct ConfigMapResource: Identifiable, Hashable {
     let name: String
     let namespace: String
     let dataKeyCount: Int
-    let isImmutable: Bool
-    let createdAt: Date?
-
-    var immutableText: String {
-        isImmutable ? "Yes" : "No"
-    }
-
-    var immutableSortValue: Int {
-        isImmutable ? 1 : 0
-    }
-
-    var ageSortValue: Date {
-        createdAt ?? .distantPast
-    }
+    let ageText: String
+    let ageSortValue: Int
 }
 
 enum ClusterBrowserInspectCommandBuilder {

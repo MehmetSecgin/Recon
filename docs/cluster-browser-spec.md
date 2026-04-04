@@ -17,7 +17,7 @@ No logs viewer. No YAML editor. No exec. A fast resource browser with targeted a
 ## Design Principles
 
 1. **Open-n-close** — Fetch data when the window opens, release everything when it closes. No background watchers, no persistent caches, no retained resource lists.
-2. **Shell out, don't embed** — Every query is a `kubectl` process that starts, returns JSON, and exits. No embedded Kubernetes client library, no lingering HTTP connections.
+2. **Shell out, don't embed** — Every query is a `kubectl` process that starts, returns compact text or JSON as needed, and exits. No embedded Kubernetes client library, no lingering HTTP connections.
 3. **Value types** — Resource models are Swift structs. Stack-allocated where possible, deterministic deallocation via ARC. No object graphs, no retain cycles.
 4. **Native table rendering** — Use SwiftUI `Table` for the resource browser so column headers, selection, and sort indicators feel native on macOS. Filtering and sorting happen before data is passed into the table.
 5. **No speculative work** — Don't pre-fetch resource types the user hasn't asked for. Don't poll in the background. Don't cache across window sessions.
@@ -125,8 +125,8 @@ actor KubeResourceService {
 
 Each method:
 1. Resolves the `kubectl` executable via `CommandEnvironmentResolver`
-2. Runs `kubectl get <resource> -n <namespace> -o json` with a 5-second timeout
-3. Decodes the JSON items array into the corresponding Swift model
+2. Runs `kubectl` with a 5-second timeout using compact `jsonpath` or default table output where possible
+3. Parses the result into the corresponding Swift model
 4. Returns the result — no caching, no side effects
 
 ### Resource Models
@@ -135,51 +135,15 @@ Minimal structs that decode only the fields we display. No full Kubernetes API o
 
 ```swift
 struct PodResource: Identifiable {
-    let id: String            // metadata.uid
-    let name: String          // metadata.name
-    let namespace: String     // metadata.namespace
-    let phase: PodPhase       // status.phase → enum
-    let statusReason: String? // derived from container statuses (see below)
-    let readyCount: Int       // count of ready containers
-    let totalCount: Int       // total containers
-    let restarts: Int         // sum of container restart counts
-    let createdAt: Date       // metadata.creationTimestamp
-    let nodeName: String?     // spec.nodeName
-    let ownerReference: OwnerReferenceSummary? // deployment/replicaset/statefulset/etc.
-    let containerPorts: [ContainerPort]  // all declared container ports (for port forward pre-fill)
-}
-
-/// `statusReason` is derived from `status.containerStatuses[].state`:
-///
-/// CrashLoopBackOff is NOT a pod phase — it's a container waiting reason.
-/// A pod can be phase=Running but have a container in CrashLoopBackOff.
-/// Similarly, ImagePullBackOff, ErrImagePull, etc. are container-level.
-///
-/// Derivation logic at decode time:
-/// 1. Scan all `status.containerStatuses[].state.waiting.reason`
-/// 2. If any container is waiting with a recognized reason, capture it:
-///    - "CrashLoopBackOff" → statusReason = "CrashLoopBackOff"
-///    - "ImagePullBackOff" / "ErrImagePull" → statusReason = "ImagePullBackOff"
-///    - "CreateContainerConfigError" → statusReason = same
-/// 3. If multiple containers have different reasons, pick the most severe
-///    (CrashLoopBackOff > ImagePullBackOff > other)
-/// 4. If no containers are in a waiting state with a recognized reason, statusReason = nil
-///
-/// This gives the UI a reliable signal for status coloring and display text
-/// without resorting to unreliable heuristics like "high restart count".
-
-struct ContainerPort {
-    let name: String?
-    let containerPort: UInt16
-    let protocol: String      // TCP, UDP
-}
-
-enum PodPhase: String, Decodable {
-    case running = "Running"
-    case pending = "Pending"
-    case succeeded = "Succeeded"
-    case failed = "Failed"
-    case unknown = "Unknown"
+    let id: String
+    let name: String
+    let namespace: String
+    let statusText: String    // parsed from kubectl STATUS column
+    let readyCount: Int       // parsed from READY column
+    let totalCount: Int
+    let restarts: Int         // parsed from RESTARTS column
+    let ageText: String       // raw kubectl AGE column
+    let ageSortValue: Int     // parsed approximation for sorting
 }
 
 struct DeploymentResource: Identifiable {
@@ -190,52 +154,19 @@ struct DeploymentResource: Identifiable {
     let desiredReplicas: Int
     let updatedReplicas: Int
     let availableReplicas: Int
-    let selector: [String: String]   // spec.selector.matchLabels
-    let createdAt: Date
+    let ageText: String
+    let ageSortValue: Int
 }
 
 struct ServiceResource: Identifiable {
     let id: String
     let name: String
     let namespace: String
-    let type: String          // ClusterIP, NodePort, LoadBalancer
+    let type: String
     let clusterIP: String?
-    let externalIP: String?
-    let selector: [String: String]   // spec.selector, empty if not selector-backed
-    let ports: [ServicePort]
-    let createdAt: Date
-}
-
-struct ServicePort {
-    let name: String?
-    let port: UInt16              // service port
-    let targetPort: IntOrString   // container port — can be numeric (8080) or named ("http")
-    let protocol: String          // TCP, UDP
-}
-
-/// Kubernetes uses IntOrString for fields like targetPort that accept either a port number
-/// or a named port reference. This needs a custom Decodable implementation that tries
-/// Int first, then String.
-enum IntOrString: Equatable {
-    case int(UInt16)
-    case string(String)
-
-    /// The numeric value if available, nil for named ports.
-    /// Port forward UI uses this to pre-fill; named ports show the name and require
-    /// the user to enter a numeric local port.
-    var numericValue: UInt16? {
-        switch self {
-        case .int(let v): return v
-        case .string: return nil
-        }
-    }
-
-    var displayValue: String {
-        switch self {
-        case .int(let v): return "\(v)"
-        case .string(let s): return s
-        }
-    }
+    let portsText: String
+    let ageText: String
+    let ageSortValue: Int
 }
 
 struct IngressResource: Identifiable {
@@ -468,12 +399,12 @@ Fixed window size, wider than Diagnostics to support a true columnar resource ta
 - Choosing the Status column (or equivalent health-oriented sort control) restores the default health-first ordering for resource types that support it.
 
 **Status colors:**
-- Green: healthy (Pod phase Running + all containers ready + no statusReason, Deployment fully available)
-- Yellow: transitional (Pod Pending, Pod with ImagePullBackOff, Deployment partially ready)
-- Red: unhealthy (Pod Failed, Pod with statusReason=CrashLoopBackOff, Deployment zero available)
-- Gray: terminal/neutral (Pod Succeeded)
+- Green: healthy (`Running` + all containers ready, Deployment fully available)
+- Yellow: transitional (`Pending`, `ImagePullBackOff`, or partially ready resources)
+- Red: unhealthy (`CrashLoopBackOff`, `CreateContainerConfigError`, `Error`, `Failed`, or zero-available Deployment)
+- Gray: terminal/neutral (`Completed`)
 
-**Pod status display text** shows `statusReason` when present (e.g., "CrashLoopBackOff") instead of the phase. This matches `kubectl get pods` behavior, where the STATUS column shows the most relevant state, not always the phase.
+**Pod status display text** comes straight from the parsed kubectl `STATUS` column, normalized only for well-known aliases like `ErrImagePull` → `ImagePullBackOff`.
 
 **Relationship hint strip:**
 
@@ -684,8 +615,8 @@ This is a new `LongRunningProcess` helper (or built into `PortForwardManager` di
 **Reuses with minor touchpoint:**
 - `NamespaceDiscoveryService` — the cluster browser calls its existing `fetchAvailable(for:)` to populate the namespace picker
 - `KubeTargetResolver` — called once on window open to get the current context and namespace as defaults
-- `ReconApp.swift` — add a new `Window("Recon — Cluster", id: AppWindowID.cluster)` scene. Initialize `PortForwardManager` at the app level so it survives window lifecycle
-- `ReconMenuView.swift` — add a "Cluster Browser" button to the menu (alongside existing Diagnostics button). Add an "Active Port Forwards" section that appears when there are active forwards, with stop buttons
+- `ReconApp.swift` — add a new `Window("Recon - Deck", id: AppWindowID.cluster)` scene. Initialize `PortForwardManager` at the app level so it survives window lifecycle
+- `ReconMenuView.swift` — add a "Deck" button to the menu (alongside existing Diagnostics button). Add an "Active Port Forwards" section that appears when there are active forwards, with stop buttons
 - `TelepresenceController` — the view model reads the current context/namespace from the controller. The controller also holds a reference to `PortForwardManager` so the menu view can access active forwards
 - `NSPasteboard` — used by the view model to copy generated `kubectl` commands without executing them
 
@@ -693,9 +624,9 @@ This is a new `LongRunningProcess` helper (or built into `PortForwardManager` di
 
 | Action | Command | Timeout |
 |---|---|---|
-| List pods | `kubectl get pods -n <ns> -o json` | 5s |
-| List deployments | `kubectl get deployments -n <ns> -o json` | 5s |
-| List services | `kubectl get services -n <ns> -o json` | 5s |
+| List pods | `kubectl --request-timeout=5s get pods -n <ns> --chunk-size=200 --no-headers` | 5s |
+| List deployments | `kubectl --request-timeout=5s get deployments -n <ns> --chunk-size=200 --no-headers` | 5s |
+| List services | `kubectl --request-timeout=5s get services -n <ns> --chunk-size=200 --no-headers` | 5s |
 | List ingresses | `kubectl get ingresses -n <ns> -o json` | 5s |
 | Resolve related pods | `kubectl get pods -n <ns> -l <selector> -o json` | 5s |
 | Resolve related services | `kubectl get services -n <ns> -o json` | 5s |
@@ -723,7 +654,7 @@ All commands use the environment from `CommandEnvironmentResolver.executionEnvir
 ### Window Lifecycle
 
 ```
-User clicks "Cluster Browser" in menu
+User clicks "Deck" in menu
   → ClusterBrowserWindowPresenter.present()
   → Window opens, onAppear fires
   → viewModel.activateWindow()

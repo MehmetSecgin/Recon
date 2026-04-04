@@ -741,8 +741,7 @@ final class ClusterBrowserViewModel: ObservableObject {
         configMaps.filter { configMap in
             matchesFilter([
                 configMap.name,
-                "\(configMap.dataKeyCount)",
-                configMap.immutableText
+                "\(configMap.dataKeyCount)"
             ])
         }
     }
@@ -894,8 +893,6 @@ final class ClusterBrowserViewModel: ObservableObject {
             return [KeyPathComparator(\.name, order: direction.sortOrder)]
         case .keyCount(let direction):
             return [KeyPathComparator(\.dataKeyCount, order: direction.sortOrder)]
-        case .immutable(let direction):
-            return [KeyPathComparator(\.immutableSortValue, order: direction.sortOrder)]
         case .age(let direction):
             return [KeyPathComparator(\.ageSortValue, order: direction.sortOrder)]
         }
@@ -912,8 +909,6 @@ final class ClusterBrowserViewModel: ObservableObject {
             return .name(direction)
         case \ConfigMapResource.dataKeyCount:
             return .keyCount(direction)
-        case \ConfigMapResource.immutableSortValue:
-            return .immutable(direction)
         case \ConfigMapResource.ageSortValue:
             return .age(direction)
         default:

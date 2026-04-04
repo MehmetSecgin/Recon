@@ -7,6 +7,7 @@ final class DiagnosticsViewModel: ObservableObject {
         case health
         case logs
         case history
+        case commands
 
         var title: String {
             switch self {
@@ -16,6 +17,8 @@ final class DiagnosticsViewModel: ObservableObject {
                 return "Logs"
             case .history:
                 return "History"
+            case .commands:
+                return "Commands"
             }
         }
 
@@ -27,6 +30,8 @@ final class DiagnosticsViewModel: ObservableObject {
                 return "doc.text.magnifyingglass"
             case .history:
                 return "clock.arrow.circlepath"
+            case .commands:
+                return "terminal"
             }
         }
     }
@@ -34,6 +39,7 @@ final class DiagnosticsViewModel: ObservableObject {
     @Published var selectedTab: Tab = .health
     @Published var selectedLogSource: DiagnosticsLogSource?
     @Published var filterText = ""
+    @Published var showStatusPollCommands = false
     @Published private(set) var includedLogLevels: Set<DiagnosticsLogLevel> = [.info, .warn, .error]
     @Published private(set) var healthSnapshot: DiagnosticsHealthSnapshot?
     @Published private(set) var healthErrorMessage: String?
@@ -42,14 +48,21 @@ final class DiagnosticsViewModel: ObservableObject {
     @Published private(set) var logsDirectoryExists = false
     @Published private(set) var historyItems: [DiagnosticsHistoryItem] = []
     @Published private(set) var historyErrorMessage: String?
+    @Published private(set) var commandItems: [CommandHistorySummaryItem] = []
+    @Published private(set) var expandedCommandIDs = Set<Int64>()
+    @Published private(set) var loadingCommandDetailIDs = Set<Int64>()
+    @Published private(set) var commandDetailItems: [Int64: CommandHistoryDetailItem] = [:]
+    @Published private(set) var commandErrorMessage: String?
     @Published private(set) var exportStatusMessage: String?
     @Published private(set) var isLoadingHealth = false
     @Published private(set) var isLoadingHistory = false
+    @Published private(set) var isLoadingCommands = false
     @Published private(set) var isExportingBundle = false
 
-    private let controller: TelepresenceController
-    private let historyStore: EventHistoryStore
-    private let logService: DiagnosticsLogService
+    private let controller: DiagnosticsControllerClient
+    private let historyStore: DiagnosticsHistoryStoreClient
+    private let commandHistoryStore: DiagnosticsCommandHistoryStoreClient
+    private let logService: DiagnosticsLogServiceClient
     private var logPollingTask: Task<Void, Never>?
     private var isWindowActive = false
     private var lastBackfillAt: Date?
@@ -58,19 +71,22 @@ final class DiagnosticsViewModel: ObservableObject {
 
     convenience init(controller: TelepresenceController) {
         self.init(
-            controller: controller,
-            historyStore: EventHistoryStore(),
-            logService: DiagnosticsLogService()
+            controller: .live(controller),
+            historyStore: .live(EventHistoryStore()),
+            commandHistoryStore: .live(CommandHistoryStore.shared),
+            logService: .live(DiagnosticsLogService())
         )
     }
 
     init(
-        controller: TelepresenceController,
-        historyStore: EventHistoryStore,
-        logService: DiagnosticsLogService
+        controller: DiagnosticsControllerClient,
+        historyStore: DiagnosticsHistoryStoreClient,
+        commandHistoryStore: DiagnosticsCommandHistoryStoreClient,
+        logService: DiagnosticsLogServiceClient
     ) {
         self.controller = controller
         self.historyStore = historyStore
+        self.commandHistoryStore = commandHistoryStore
         self.logService = logService
     }
 
@@ -84,6 +100,12 @@ final class DiagnosticsViewModel: ObservableObject {
             let matchesFilter = filterText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
                 entryMatchesFilter(entry)
             return levelIncluded && matchesFilter
+        }
+    }
+
+    var visibleCommandItems: [CommandHistorySummaryItem] {
+        commandItems.filter { item in
+            showStatusPollCommands || item.source.isStatusPoll == false
         }
     }
 
@@ -117,7 +139,14 @@ final class DiagnosticsViewModel: ObservableObject {
 
     func selectTab(_ tab: Tab) {
         guard selectedTab != tab else { return }
+
+        let previousTab = selectedTab
         selectedTab = tab
+
+        if previousTab == .commands && tab != .commands {
+            clearCommandHistoryState()
+        }
+
         guard isWindowActive else { return }
 
         Task { [weak self] in
@@ -153,6 +182,50 @@ final class DiagnosticsViewModel: ObservableObject {
         }
     }
 
+    func toggleCommandExpansion(_ item: CommandHistorySummaryItem) {
+        if expandedCommandIDs.contains(item.id) {
+            expandedCommandIDs.remove(item.id)
+            return
+        }
+
+        expandedCommandIDs.insert(item.id)
+
+        guard commandDetailItems[item.id] == nil,
+              loadingCommandDetailIDs.contains(item.id) == false else {
+            return
+        }
+
+        loadingCommandDetailIDs.insert(item.id)
+        Task { [weak self] in
+            guard let self else { return }
+
+            do {
+                let detail = try await self.commandHistoryStore.detail(item.id)
+                guard self.isWindowActive,
+                      self.selectedTab == .commands,
+                      self.expandedCommandIDs.contains(item.id) else {
+                    self.loadingCommandDetailIDs.remove(item.id)
+                    return
+                }
+
+                if let detail {
+                    self.commandDetailItems[item.id] = detail
+                    self.commandErrorMessage = nil
+                }
+            } catch {
+                if self.selectedTab == .commands {
+                    self.commandErrorMessage = error.localizedDescription
+                }
+            }
+
+            self.loadingCommandDetailIDs.remove(item.id)
+        }
+    }
+
+    func commandDetail(for id: Int64) -> CommandHistoryDetailItem? {
+        commandDetailItems[id]
+    }
+
     func refreshHealth() async {
         isLoadingHealth = true
         let snapshot = await controller.fetchDiagnosticsHealthSnapshot()
@@ -165,7 +238,7 @@ final class DiagnosticsViewModel: ObservableObject {
         isLoadingHistory = true
         do {
             try await historyStore.prepare()
-            historyItems = try await historyStore.recentHistory()
+            historyItems = try await historyStore.recentHistory(300)
             historyErrorMessage = nil
         } catch {
             historyErrorMessage = error.localizedDescription
@@ -173,8 +246,23 @@ final class DiagnosticsViewModel: ObservableObject {
         isLoadingHistory = false
     }
 
+    func refreshCommands() async {
+        isLoadingCommands = true
+        clearCommandHistoryState(retainingItems: false)
+
+        do {
+            try await commandHistoryStore.prepare()
+            commandItems = try await commandHistoryStore.recentSummaries(500)
+            commandErrorMessage = nil
+        } catch {
+            commandErrorMessage = error.localizedDescription
+        }
+
+        isLoadingCommands = false
+    }
+
     func reloadLogs(reset: Bool) async {
-        let snapshot = await (reset ? logService.snapshot(for: selectedLogSource) : logService.poll(for: selectedLogSource))
+        let snapshot = await (reset ? logService.snapshot(selectedLogSource) : logService.poll(selectedLogSource))
         sourceStates = snapshot.sourceStates
         logsDirectoryExists = snapshot.logsDirectoryExists
 
@@ -217,13 +305,13 @@ final class DiagnosticsViewModel: ObservableObject {
 
     func openSelectedLogInConsole() {
         Task {
-            await logService.openInConsole(source: selectedLogSource)
+            await logService.openInConsole(selectedLogSource)
         }
     }
 
     func revealSelectedLog() {
         Task {
-            await logService.reveal(source: selectedLogSource)
+            await logService.reveal(selectedLogSource)
         }
     }
 
@@ -372,6 +460,9 @@ final class DiagnosticsViewModel: ObservableObject {
             stopLogPolling()
             await backfillHistoryFromLogs()
             await refreshHistory()
+        case .commands:
+            stopLogPolling()
+            await refreshCommands()
         }
     }
 
@@ -379,6 +470,7 @@ final class DiagnosticsViewModel: ObservableObject {
         selectedTab = .health
         selectedLogSource = nil
         filterText = ""
+        showStatusPollCommands = false
         includedLogLevels = Self.defaultIncludedLogLevels
         healthSnapshot = nil
         healthErrorMessage = nil
@@ -387,11 +479,23 @@ final class DiagnosticsViewModel: ObservableObject {
         logsDirectoryExists = false
         historyItems = []
         historyErrorMessage = nil
+        clearCommandHistoryState()
         exportStatusMessage = nil
         isLoadingHealth = false
         isLoadingHistory = false
+        isLoadingCommands = false
         isExportingBundle = false
         lastBackfillAt = nil
+    }
+
+    private func clearCommandHistoryState(retainingItems: Bool = false) {
+        if retainingItems == false {
+            commandItems = []
+        }
+        expandedCommandIDs = []
+        loadingCommandDetailIDs = []
+        commandDetailItems = [:]
+        commandErrorMessage = nil
     }
 
     private func entryMatchesFilter(_ entry: DiagnosticsLogEntry) -> Bool {

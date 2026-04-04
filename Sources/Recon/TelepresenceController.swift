@@ -449,7 +449,7 @@ final class TelepresenceController: ObservableObject {
 
     func refreshNow() {
         Task {
-            await refreshStatus()
+            await refreshStatus(source: .statusCheck)
         }
     }
 
@@ -691,7 +691,10 @@ final class TelepresenceController: ObservableObject {
 
     func fetchDiagnosticsHealthSnapshot() async -> DiagnosticsHealthSnapshot {
         do {
-            let baseSnapshot = try await cli.fetchDiagnosticsStatus()
+            let baseSnapshot = try await cli.fetchDiagnosticsStatus(
+                context: targetMetadata.context,
+                namespace: targetMetadata.namespace
+            )
             return DiagnosticsHealthSnapshot(
                 status: baseSnapshot.status,
                 telepresenceUnavailable: baseSnapshot.telepresenceUnavailable,
@@ -709,7 +712,10 @@ final class TelepresenceController: ObservableObject {
     }
 
     func exportDiagnosticBundle() async -> DiagnosticExportOutcome {
-        await cli.exportDiagnosticBundle()
+        await cli.exportDiagnosticBundle(
+            context: targetMetadata.context,
+            namespace: targetMetadata.namespace
+        )
     }
 
     func openLogs() {
@@ -799,7 +805,7 @@ final class TelepresenceController: ObservableObject {
         pollingTask?.cancel()
 
         pollingTask = Task {
-            await refreshStatus()
+            await refreshStatus(source: .statusPoll)
 
             guard let interval = settingsStore.pollingInterval.duration else {
                 return
@@ -808,7 +814,7 @@ final class TelepresenceController: ObservableObject {
             while !Task.isCancelled {
                 try? await Task.sleep(for: interval)
                 guard !Task.isCancelled else { return }
-                await refreshStatus()
+                await refreshStatus(source: .statusPoll)
             }
         }
     }
@@ -864,15 +870,19 @@ final class TelepresenceController: ObservableObject {
                 lastCommandFailure = nil
             }
 
-            await refreshStatus()
+            await refreshStatus(source: .statusCheck)
         }
     }
 
-    private func refreshStatus() async {
+    private func refreshStatus(source: CommandHistorySource = .statusCheck) async {
         guard !isRunningCommand else { return }
 
         let previousState = snapshot.state
-        let updatedSnapshot = await cli.fetchStatus()
+        let updatedSnapshot = await cli.fetchStatus(
+            source: source,
+            context: targetMetadata.context,
+            namespace: targetMetadata.namespace
+        )
         let recoveredFromAutoReconnect = hasAttemptedAutoReconnectForCurrentDrop &&
             updatedSnapshot.state == .connected &&
             previousState != .connected
@@ -986,7 +996,11 @@ final class TelepresenceController: ObservableObject {
     private func performAutoConnectOnLaunchIfNeeded() async {
         guard settingsStore.autoConnectOnLaunchEnabled else { return }
 
-        let initialSnapshot = await cli.fetchStatus()
+        let initialSnapshot = await cli.fetchStatus(
+            source: .statusCheck,
+            context: targetMetadata.context,
+            namespace: targetMetadata.namespace
+        )
         snapshot = initialSnapshot
         await refreshTargetMetadata()
 

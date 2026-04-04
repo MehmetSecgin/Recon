@@ -3,14 +3,20 @@ import Foundation
 @main
 struct ClusterBrowserPhase1Harness {
     static func main() throws {
-        try testStatusReasonDerivation()
+        try testPodStatusNormalization()
         try testPodHealthClassification()
         try testDeploymentHealthClassification()
         try testDefaultHealthFirstOrdering()
         try testUserSortOverridesAndReset()
         try testSelectionRetention()
         try testInspectCommandGeneration()
-        try testConfigMapDecoding()
+        try testKubectlConfigTargetParsing()
+        try testKubectlContextCatalogParsing()
+        try testKubectlAgeParsing()
+        try testKubectlPodTableParsing()
+        try testKubectlDeploymentTableParsing()
+        try testKubectlServiceTableParsing()
+        try testKubectlConfigMapTableParsing()
         try testBrowserContextIdentity()
         try testBrowserNamespaceFallback()
         try testDuplicateContextBadges()
@@ -19,123 +25,71 @@ struct ClusterBrowserPhase1Harness {
         print("Cluster browser phase 1 harness passed")
     }
 
-    private static func testStatusReasonDerivation() throws {
+    private static func testPodStatusNormalization() throws {
         try expect(
-            PodStatusReasonDeriver.derive(from: ["ImagePullBackOff", "CrashLoopBackOff"]) == "CrashLoopBackOff",
-            "CrashLoopBackOff should win over lower-severity reasons"
-        )
-        try expect(
-            PodStatusReasonDeriver.derive(from: ["ErrImagePull"]) == "ImagePullBackOff",
+            PodStatusTextNormalizer.normalize("ErrImagePull") == "ImagePullBackOff",
             "ErrImagePull should normalize to ImagePullBackOff"
         )
         try expect(
-            PodStatusReasonDeriver.derive(from: ["CreateContainerConfigError"]) == "CreateContainerConfigError",
-            "CreateContainerConfigError should be preserved"
+            PodStatusTextNormalizer.normalize(" CrashLoopBackOff ") == "CrashLoopBackOff",
+            "Known pod status text should trim and normalize"
         )
         try expect(
-            PodStatusReasonDeriver.derive(from: [nil, "ContainerCreating"]) == "ContainerCreating",
-            "Unknown waiting reasons should pass through"
+            PodStatusTextNormalizer.normalize("ContainerCreating") == "ContainerCreating",
+            "Unrecognized status text should be preserved"
         )
         try expect(
-            PodStatusReasonDeriver.derive(from: [nil, "   "]) == nil,
-            "Empty waiting reasons should produce nil"
+            PodStatusTextNormalizer.normalize("   ") == "Unknown",
+            "Empty status text should fall back to Unknown"
         )
     }
 
     private static func testPodHealthClassification() throws {
-        let crashLoop = PodResource(
-            id: "pod:ns:crash",
+        let crashLoop = makePod(
             name: "crash",
-            namespace: "ns",
-            phase: .running,
-            statusReason: "CrashLoopBackOff",
+            statusText: "CrashLoopBackOff",
             readyCount: 0,
             totalCount: 1,
             restartCount: 5,
-            createdAt: Date(timeIntervalSince1970: 100)
+            ageText: "4h"
         )
-        let pulling = PodResource(
-            id: "pod:ns:pull",
+        let pulling = makePod(
             name: "pull",
-            namespace: "ns",
-            phase: .pending,
-            statusReason: "ImagePullBackOff",
+            statusText: "ImagePullBackOff",
             readyCount: 0,
             totalCount: 1,
             restartCount: 0,
-            createdAt: Date(timeIntervalSince1970: 200)
+            ageText: "3h"
         )
-        let healthy = PodResource(
-            id: "pod:ns:ok",
+        let healthy = makePod(
             name: "ok",
-            namespace: "ns",
-            phase: .running,
-            statusReason: nil,
+            statusText: "Running",
             readyCount: 2,
             totalCount: 2,
             restartCount: 0,
-            createdAt: Date(timeIntervalSince1970: 300)
+            ageText: "2h"
         )
-        let completed = PodResource(
-            id: "pod:ns:done",
+        let completed = makePod(
             name: "done",
-            namespace: "ns",
-            phase: .succeeded,
-            statusReason: nil,
+            statusText: "Completed",
             readyCount: 0,
             totalCount: 0,
             restartCount: 0,
-            createdAt: Date(timeIntervalSince1970: 400)
+            ageText: "1h"
         )
 
         try expect(crashLoop.healthBucket == .unhealthy, "CrashLoopBackOff pod should be unhealthy")
         try expect(pulling.healthBucket == .transitional, "Image pull failure should be transitional")
         try expect(healthy.healthBucket == .healthy, "Fully ready running pod should be healthy")
-        try expect(completed.healthBucket == .neutral, "Succeeded pod should be neutral")
-        try expect(crashLoop.displayStatusText == "CrashLoopBackOff", "Display status should prefer status reason")
+        try expect(completed.healthBucket == .neutral, "Completed pod should be neutral")
+        try expect(crashLoop.displayStatusText == "CrashLoopBackOff", "Display status should come from parsed status text")
     }
 
     private static func testDeploymentHealthClassification() throws {
-        let down = DeploymentResource(
-            id: "deployment:ns:down",
-            name: "down",
-            namespace: "ns",
-            readyReplicas: 0,
-            desiredReplicas: 3,
-            updatedReplicas: 0,
-            availableReplicas: 0,
-            createdAt: Date(timeIntervalSince1970: 100)
-        )
-        let partial = DeploymentResource(
-            id: "deployment:ns:partial",
-            name: "partial",
-            namespace: "ns",
-            readyReplicas: 1,
-            desiredReplicas: 3,
-            updatedReplicas: 2,
-            availableReplicas: 1,
-            createdAt: Date(timeIntervalSince1970: 200)
-        )
-        let healthy = DeploymentResource(
-            id: "deployment:ns:healthy",
-            name: "healthy",
-            namespace: "ns",
-            readyReplicas: 3,
-            desiredReplicas: 3,
-            updatedReplicas: 3,
-            availableReplicas: 3,
-            createdAt: Date(timeIntervalSince1970: 300)
-        )
-        let scaledToZero = DeploymentResource(
-            id: "deployment:ns:zero",
-            name: "zero",
-            namespace: "ns",
-            readyReplicas: 0,
-            desiredReplicas: 0,
-            updatedReplicas: 0,
-            availableReplicas: 0,
-            createdAt: Date(timeIntervalSince1970: 400)
-        )
+        let down = makeDeployment(name: "down", ready: 0, desired: 3, updated: 0, available: 0, ageText: "4h")
+        let partial = makeDeployment(name: "partial", ready: 1, desired: 3, updated: 2, available: 1, ageText: "3h")
+        let healthy = makeDeployment(name: "healthy", ready: 3, desired: 3, updated: 3, available: 3, ageText: "2h")
+        let scaledToZero = makeDeployment(name: "zero", ready: 0, desired: 0, updated: 0, available: 0, ageText: "1h")
 
         try expect(down.healthBucket == .unhealthy, "Zero-available deployment should be unhealthy")
         try expect(partial.healthBucket == .transitional, "Partially ready deployment should be transitional")
@@ -145,75 +99,18 @@ struct ClusterBrowserPhase1Harness {
 
     private static func testDefaultHealthFirstOrdering() throws {
         let pods = [
-            PodResource(
-                id: "pod:ns:healthy",
-                name: "healthy",
-                namespace: "ns",
-                phase: .running,
-                statusReason: nil,
-                readyCount: 1,
-                totalCount: 1,
-                restartCount: 0,
-                createdAt: Date(timeIntervalSince1970: 300)
-            ),
-            PodResource(
-                id: "pod:ns:transitional",
-                name: "transitional",
-                namespace: "ns",
-                phase: .pending,
-                statusReason: nil,
-                readyCount: 0,
-                totalCount: 1,
-                restartCount: 0,
-                createdAt: Date(timeIntervalSince1970: 200)
-            ),
-            PodResource(
-                id: "pod:ns:unhealthy",
-                name: "unhealthy",
-                namespace: "ns",
-                phase: .running,
-                statusReason: "CrashLoopBackOff",
-                readyCount: 0,
-                totalCount: 1,
-                restartCount: 4,
-                createdAt: Date(timeIntervalSince1970: 100)
-            )
+            makePod(name: "healthy", statusText: "Running", readyCount: 1, totalCount: 1, restartCount: 0, ageText: "1h"),
+            makePod(name: "transitional", statusText: "Pending", readyCount: 0, totalCount: 1, restartCount: 0, ageText: "2h"),
+            makePod(name: "unhealthy", statusText: "CrashLoopBackOff", readyCount: 0, totalCount: 1, restartCount: 4, ageText: "3h")
         ]
 
         let sortedPods = ClusterBrowserSorting.sortPods(pods, using: .defaultHealth)
         try expect(sortedPods.map(\.name) == ["unhealthy", "transitional", "healthy"], "Pods should sort unhealthy first by default")
 
         let deployments = [
-            DeploymentResource(
-                id: "deployment:ns:healthy",
-                name: "healthy",
-                namespace: "ns",
-                readyReplicas: 2,
-                desiredReplicas: 2,
-                updatedReplicas: 2,
-                availableReplicas: 2,
-                createdAt: Date(timeIntervalSince1970: 300)
-            ),
-            DeploymentResource(
-                id: "deployment:ns:partial",
-                name: "partial",
-                namespace: "ns",
-                readyReplicas: 1,
-                desiredReplicas: 2,
-                updatedReplicas: 1,
-                availableReplicas: 1,
-                createdAt: Date(timeIntervalSince1970: 200)
-            ),
-            DeploymentResource(
-                id: "deployment:ns:down",
-                name: "down",
-                namespace: "ns",
-                readyReplicas: 0,
-                desiredReplicas: 2,
-                updatedReplicas: 0,
-                availableReplicas: 0,
-                createdAt: Date(timeIntervalSince1970: 100)
-            )
+            makeDeployment(name: "healthy", ready: 2, desired: 2, updated: 2, available: 2, ageText: "1h"),
+            makeDeployment(name: "partial", ready: 1, desired: 2, updated: 1, available: 1, ageText: "2h"),
+            makeDeployment(name: "down", ready: 0, desired: 2, updated: 0, available: 0, ageText: "3h")
         ]
 
         let sortedDeployments = ClusterBrowserSorting.sortDeployments(deployments, using: .defaultHealth)
@@ -222,28 +119,8 @@ struct ClusterBrowserPhase1Harness {
 
     private static func testUserSortOverridesAndReset() throws {
         let pods = [
-            PodResource(
-                id: "pod:ns:alpha",
-                name: "alpha",
-                namespace: "ns",
-                phase: .running,
-                statusReason: nil,
-                readyCount: 1,
-                totalCount: 1,
-                restartCount: 0,
-                createdAt: Date(timeIntervalSince1970: 100)
-            ),
-            PodResource(
-                id: "pod:ns:zeta",
-                name: "zeta",
-                namespace: "ns",
-                phase: .running,
-                statusReason: "CrashLoopBackOff",
-                readyCount: 0,
-                totalCount: 1,
-                restartCount: 3,
-                createdAt: Date(timeIntervalSince1970: 200)
-            )
+            makePod(name: "alpha", statusText: "Running", readyCount: 1, totalCount: 1, restartCount: 0, ageText: "1h"),
+            makePod(name: "zeta", statusText: "CrashLoopBackOff", readyCount: 0, totalCount: 1, restartCount: 3, ageText: "2h")
         ]
 
         let nameDescending = ClusterBrowserSorting.sortPods(pods, using: .name(.descending))
@@ -253,22 +130,8 @@ struct ClusterBrowserPhase1Harness {
         try expect(reset.map(\.name) == ["zeta", "alpha"], "Reset should restore health-first ordering")
 
         let configMaps = [
-            ConfigMapResource(
-                id: "configmap:ns:b",
-                name: "b",
-                namespace: "ns",
-                dataKeyCount: 1,
-                isImmutable: false,
-                createdAt: Date(timeIntervalSince1970: 100)
-            ),
-            ConfigMapResource(
-                id: "configmap:ns:a",
-                name: "a",
-                namespace: "ns",
-                dataKeyCount: 4,
-                isImmutable: true,
-                createdAt: Date(timeIntervalSince1970: 200)
-            )
+            makeConfigMap(name: "b", keyCount: 1, ageText: "1h"),
+            makeConfigMap(name: "a", keyCount: 4, ageText: "2h")
         ]
 
         let keyCountDescending = ClusterBrowserSorting.sortConfigMaps(configMaps, using: .keyCount(.descending))
@@ -311,41 +174,89 @@ struct ClusterBrowserPhase1Harness {
         )
     }
 
-    private static func testConfigMapDecoding() throws {
-        let rawJSON = """
-        {
-          "items": [
-            {
-              "metadata": {
-                "name": "app-config",
-                "creationTimestamp": "2024-01-01T10:00:00Z"
-              },
-              "data": {
-                "A": "1",
-                "B": "2"
-              },
-              "immutable": true
-            },
-            {
-              "metadata": {
-                "name": "empty-config",
-                "namespace": "override-ns",
-                "creationTimestamp": "2024-01-02T10:00:00.123Z"
-              }
-            }
-          ]
-        }
+    private static func testKubectlConfigTargetParsing() throws {
+        let parsed = KubectlConfigOutputParsing.parseTargetFields(from: "prod-eu1\tpayments\n")
+        try expect(parsed.context == "prod-eu1", "Target parsing should preserve current context")
+        try expect(parsed.namespace == "payments", "Target parsing should preserve namespace")
+
+        let fallback = KubectlConfigOutputParsing.parseTargetFields(from: "prod-eu1\t\n")
+        try expect(fallback.context == "prod-eu1", "Target parsing should keep context when namespace is empty")
+        try expect(fallback.namespace == nil, "Empty namespace should decode as nil")
+    }
+
+    private static func testKubectlContextCatalogParsing() throws {
+        let output = """
+        prod-eu1\tpayments
+        staging\t
+        qa
         """
 
-        let decoded = try ConfigMapResourceDecoder.decode(from: Data(rawJSON.utf8), defaultNamespace: "fallback-ns")
-        try expect(decoded.count == 2, "Two configmaps should decode")
-        try expect(decoded[0].namespace == "fallback-ns", "Missing namespace should fall back to requested namespace")
-        try expect(decoded[0].dataKeyCount == 2, "Configmap key count should reflect decoded data keys")
-        try expect(decoded[0].isImmutable == true, "Configmap immutable flag should decode")
-        try expect(decoded[1].namespace == "override-ns", "Explicit namespace should be preserved")
-        try expect(decoded[1].dataKeyCount == 0, "Missing data should decode as zero keys")
-        try expect(decoded[1].isImmutable == false, "Missing immutable flag should default to false")
-        try expect(decoded[1].createdAt != nil, "Fractional-second timestamps should decode")
+        let parsed = KubectlConfigOutputParsing.parseContextEntries(from: output)
+        try expect(parsed.count == 3, "Three contexts should decode from compact jsonpath output")
+        try expect(parsed[0] == .init(name: "prod-eu1", namespace: "payments"), "Explicit namespaces should decode")
+        try expect(parsed[1] == .init(name: "staging", namespace: nil), "Empty namespaces should decode as nil")
+        try expect(parsed[2] == .init(name: "qa", namespace: nil), "Missing namespace field should decode as nil")
+    }
+
+    private static func testKubectlAgeParsing() throws {
+        try expect(KubectlAgeParser.sortValue(for: "5m") == -(5 * 60), "Minutes should parse into sortable age values")
+        try expect(KubectlAgeParser.sortValue(for: "2h") == -(2 * 60 * 60), "Hours should parse into sortable age values")
+        try expect(KubectlAgeParser.sortValue(for: "3d") == -(3 * 60 * 60 * 24), "Days should parse into sortable age values")
+        try expect(KubectlAgeParser.sortValue(for: "4w") == -(4 * 60 * 60 * 24 * 7), "Weeks should parse into sortable age values")
+        try expect(KubectlAgeParser.sortValue(for: "1y") == -(60 * 60 * 24 * 365), "Years should parse into sortable age values")
+    }
+
+    private static func testKubectlPodTableParsing() throws {
+        let output = """
+        api-7b88c9  1/1  Running           0           5m
+        worker-123  0/1  CrashLoopBackOff  3 (2d ago)  2h
+        """
+
+        let parsed = try KubectlTableParser.parsePods(from: output, namespace: "prod")
+        try expect(parsed.count == 2, "Two pods should parse from kubectl table output")
+        try expect(parsed[0].name == "api-7b88c9", "Pod name should parse")
+        try expect(parsed[0].readyText == "1/1", "Ready counts should parse")
+        try expect(parsed[0].displayStatusText == "Running", "Pod status should parse")
+        try expect(parsed[1].restartCount == 3, "Pod restarts should normalize away extra timing text")
+        try expect(parsed[1].healthBucket == .unhealthy, "Parsed CrashLoopBackOff pod should be unhealthy")
+    }
+
+    private static func testKubectlDeploymentTableParsing() throws {
+        let output = """
+        api  3/3  3  3  5m
+        web  1/3  2  1  2h
+        """
+
+        let parsed = try KubectlTableParser.parseDeployments(from: output, namespace: "prod")
+        try expect(parsed.count == 2, "Two deployments should parse from kubectl table output")
+        try expect(parsed[0].readyText == "3/3", "Deployment ready text should parse")
+        try expect(parsed[1].updatedReplicas == 2, "Updated replicas should parse")
+        try expect(parsed[1].ageText == "2h", "Deployment age text should be preserved")
+    }
+
+    private static func testKubectlServiceTableParsing() throws {
+        let output = """
+        api  ClusterIP  10.96.0.1  <none>  80/TCP,443/TCP  5m
+        web  LoadBalancer  10.96.0.2  34.1.2.3  80:30080/TCP  2h
+        """
+
+        let parsed = try KubectlTableParser.parseServices(from: output, namespace: "prod")
+        try expect(parsed.count == 2, "Two services should parse from kubectl table output")
+        try expect(parsed[0].clusterIP == "10.96.0.1", "Cluster IP should parse")
+        try expect(parsed[0].portsText == "80/TCP,443/TCP", "Service ports should preserve kubectl display text")
+        try expect(parsed[1].portsText == "80:30080/TCP", "Service parsing should ignore the extra EXTERNAL-IP column")
+    }
+
+    private static func testKubectlConfigMapTableParsing() throws {
+        let output = """
+        app-config  12  5m
+        empty-config  0  2h
+        """
+
+        let parsed = try KubectlTableParser.parseConfigMaps(from: output, namespace: "prod")
+        try expect(parsed.count == 2, "Two configmaps should parse from kubectl table output")
+        try expect(parsed[0].dataKeyCount == 12, "Configmap key counts should parse from the DATA column")
+        try expect(parsed[1].ageText == "2h", "Configmap age text should be preserved")
     }
 
     private static func testBrowserContextIdentity() throws {
@@ -443,6 +354,59 @@ struct ClusterBrowserPhase1Harness {
                 query: "stg"
             ) == false,
             "Contexts with no context-name, source, or namespace match should be filtered out"
+        )
+    }
+
+    private static func makePod(
+        name: String,
+        statusText: String,
+        readyCount: Int,
+        totalCount: Int,
+        restartCount: Int,
+        ageText: String
+    ) -> PodResource {
+        PodResource(
+            id: "pod:ns:\(name)",
+            name: name,
+            namespace: "ns",
+            statusText: statusText,
+            readyCount: readyCount,
+            totalCount: totalCount,
+            restartCount: restartCount,
+            ageText: ageText,
+            ageSortValue: KubectlAgeParser.sortValue(for: ageText)
+        )
+    }
+
+    private static func makeDeployment(
+        name: String,
+        ready: Int,
+        desired: Int,
+        updated: Int,
+        available: Int,
+        ageText: String
+    ) -> DeploymentResource {
+        DeploymentResource(
+            id: "deployment:ns:\(name)",
+            name: name,
+            namespace: "ns",
+            readyReplicas: ready,
+            desiredReplicas: desired,
+            updatedReplicas: updated,
+            availableReplicas: available,
+            ageText: ageText,
+            ageSortValue: KubectlAgeParser.sortValue(for: ageText)
+        )
+    }
+
+    private static func makeConfigMap(name: String, keyCount: Int, ageText: String) -> ConfigMapResource {
+        ConfigMapResource(
+            id: "configmap:ns:\(name)",
+            name: name,
+            namespace: "ns",
+            dataKeyCount: keyCount,
+            ageText: ageText,
+            ageSortValue: KubectlAgeParser.sortValue(for: ageText)
         )
     }
 
