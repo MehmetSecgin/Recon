@@ -290,9 +290,9 @@ struct PreferencesWindowView: View {
             }
 
             PreferencesSection(
-                title: "CLUSTER BROWSER",
+                title: "DECK",
                 topPadding: 20,
-                hintText: "These kubeconfig files are only used by the cluster browser. They do not reconnect Telepresence."
+                hintText: "These kubeconfig files are only used by Deck. They do not reconnect Telepresence."
             ) {
                 PreferencesCard {
                     BrowserSourceListRow(
@@ -302,7 +302,7 @@ struct PreferencesWindowView: View {
 
                     PreferencesInsetDivider()
 
-                    PreferenceControlRow(title: "Browser sources") {
+                    PreferenceControlRow(title: "Deck sources") {
                         Button("Add Files", action: addBrowserSources)
                             .buttonStyle(.bordered)
                     }

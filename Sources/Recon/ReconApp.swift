@@ -7,6 +7,7 @@ struct ReconApp: App {
     @StateObject private var controller: TelepresenceController
     private let diagnosticsEventRecorder: DiagnosticsEventRecorder
     private let browserConfigService: BrowserConfigService
+    private let appActivationPolicyController: AppActivationPolicyController
 
     init() {
         let settingsStore = AppSettingsStore()
@@ -19,6 +20,7 @@ struct ReconApp: App {
             settingsStore: settingsStore,
             environmentResolver: environmentResolver
         )
+        appActivationPolicyController = AppActivationPolicyController()
         _settingsStore = StateObject(wrappedValue: settingsStore)
         _controller = StateObject(wrappedValue: controller)
         diagnosticsEventRecorder = DiagnosticsEventRecorder(controller: controller)
@@ -28,7 +30,10 @@ struct ReconApp: App {
         let _ = diagnosticsEventRecorder
 
         MenuBarExtra {
-            ReconMenuView(controller: controller)
+            ReconMenuView(
+                controller: controller,
+                appActivationPolicyController: appActivationPolicyController
+            )
         } label: {
             Text(controller.statusItemTitle)
                 .font(.system(size: 13, weight: .semibold, design: .monospaced))
@@ -54,10 +59,11 @@ struct ReconApp: App {
         .defaultSize(width: 560, height: 520)
         .windowResizability(.contentSize)
 
-        Window("Recon — Cluster", id: AppWindowID.cluster) {
+        Window("Recon - Deck", id: AppWindowID.cluster) {
             ClusterBrowserWindowSceneView(
                 settingsStore: settingsStore,
-                browserConfigService: browserConfigService
+                browserConfigService: browserConfigService,
+                appActivationPolicyController: appActivationPolicyController
             )
         }
         .defaultSize(width: 960, height: 700)

@@ -3,11 +3,14 @@ import SwiftUI
 
 struct ClusterBrowserWindowSceneView: View {
     @StateObject private var viewModel: ClusterBrowserViewModel
+    private let appActivationPolicyController: AppActivationPolicyController
 
     init(
         settingsStore: AppSettingsStore,
-        browserConfigService: BrowserConfigService
+        browserConfigService: BrowserConfigService,
+        appActivationPolicyController: AppActivationPolicyController
     ) {
+        self.appActivationPolicyController = appActivationPolicyController
         _viewModel = StateObject(
             wrappedValue: ClusterBrowserViewModel(
                 settingsStore: settingsStore,
@@ -18,12 +21,16 @@ struct ClusterBrowserWindowSceneView: View {
     }
 
     var body: some View {
-        ClusterBrowserWindowView(viewModel: viewModel)
+        ClusterBrowserWindowView(
+            viewModel: viewModel,
+            appActivationPolicyController: appActivationPolicyController
+        )
     }
 }
 
 struct ClusterBrowserWindowView: View {
     @ObservedObject var viewModel: ClusterBrowserViewModel
+    let appActivationPolicyController: AppActivationPolicyController
 
     var body: some View {
         HSplitView {
@@ -48,7 +55,11 @@ struct ClusterBrowserWindowView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .frame(minWidth: 960, minHeight: 700)
-        .background(ClusterBrowserWindowConfigurator())
+        .background(
+            ClusterBrowserWindowConfigurator(
+                appActivationPolicyController: appActivationPolicyController
+            )
+        )
         .background(copyCommandShortcutButton)
         .onAppear {
             viewModel.activateWindow()
@@ -991,6 +1002,8 @@ private struct ClusterBrowserSidebarActionButtonStyle: ButtonStyle {
 }
 
 private struct ClusterBrowserWindowConfigurator: NSViewRepresentable {
+    let appActivationPolicyController: AppActivationPolicyController
+
     func makeNSView(context: Context) -> NSView {
         let view = NSView(frame: .zero)
         configureWindow(for: view)
@@ -1005,10 +1018,11 @@ private struct ClusterBrowserWindowConfigurator: NSViewRepresentable {
         DispatchQueue.main.async {
             guard let window = view.window else { return }
             ClusterBrowserWindowPresenter.configure(window)
+            appActivationPolicyController.registerDeckWindow(window)
             window.isOpaque = false
             window.backgroundColor = NSColor.windowBackgroundColor
-            window.level = .floating
-            window.standardWindowButton(.zoomButton)?.isHidden = true
+            window.level = .normal
+            window.standardWindowButton(.zoomButton)?.isHidden = false
         }
     }
 }

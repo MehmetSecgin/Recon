@@ -133,18 +133,18 @@ final class ClusterBrowserViewModel: ObservableObject {
 
     var browserSourcesEmptyStateTitle: String {
         if sourceStatuses.isEmpty {
-            return "No Browser Sources"
+            return "No Deck Sources"
         }
 
-        return "No Valid Browser Contexts"
+        return "No Valid Deck Contexts"
     }
 
     var browserSourcesEmptyStateDescription: String {
         if sourceStatuses.isEmpty {
-            return "Add kubeconfig files for the cluster browser in Preferences."
+            return "Add kubeconfig files for Deck in Preferences."
         }
 
-        return "Recon couldn't find a usable context in the configured browser kubeconfig files."
+        return "Recon couldn't find a usable context in the configured Deck kubeconfig files."
     }
 
     var shouldShowErrorState: Bool {

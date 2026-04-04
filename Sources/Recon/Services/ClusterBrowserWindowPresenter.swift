@@ -3,7 +3,12 @@ import SwiftUI
 
 @MainActor
 enum ClusterBrowserWindowPresenter {
-    static func present(using openWindow: OpenWindowAction) {
+    static func present(
+        using openWindow: OpenWindowAction,
+        appActivationPolicyController: AppActivationPolicyController
+    ) {
+        appActivationPolicyController.prepareForDeckPresentation()
+
         if let window = mostRecentClusterWindow {
             bringToFront(window)
             return
@@ -15,8 +20,9 @@ enum ClusterBrowserWindowPresenter {
 
     static func configure(_ window: NSWindow) {
         window.identifier = NSUserInterfaceItemIdentifier(AppWindowID.cluster)
-        window.collectionBehavior.insert(.fullScreenAuxiliary)
-        window.collectionBehavior.insert(.moveToActiveSpace)
+        window.collectionBehavior.remove(.fullScreenAuxiliary)
+        window.collectionBehavior.insert(.fullScreenPrimary)
+        window.collectionBehavior.remove(.moveToActiveSpace)
         window.setFrameAutosaveName(AppWindowID.cluster)
     }
 

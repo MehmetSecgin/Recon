@@ -5,6 +5,7 @@ struct ReconMenuView: View {
     @Environment(\.openWindow) private var openWindow
 
     @ObservedObject var controller: TelepresenceController
+    let appActivationPolicyController: AppActivationPolicyController
 
     private var appVersionText: String {
         let shortVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
@@ -305,9 +306,12 @@ struct ReconMenuView: View {
             .padding(.top, 12)
 
             HStack(alignment: .center, spacing: 8) {
-                FooterSecondaryButton("Cluster Browser", width: 124) {
+                FooterSecondaryButton("Deck", width: 124) {
                     Task { @MainActor in
-                        ClusterBrowserWindowPresenter.present(using: openWindow)
+                        ClusterBrowserWindowPresenter.present(
+                            using: openWindow,
+                            appActivationPolicyController: appActivationPolicyController
+                        )
                     }
                 }
 
