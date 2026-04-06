@@ -1,6 +1,18 @@
 import AppKit
 import SwiftUI
 
+struct DiagnosticsWindowSceneView: View {
+    @StateObject private var viewModel: DiagnosticsViewModel
+
+    init(controller: TelepresenceController) {
+        _viewModel = StateObject(wrappedValue: DiagnosticsViewModel(controller: controller))
+    }
+
+    var body: some View {
+        DiagnosticsWindowView(viewModel: viewModel)
+    }
+}
+
 struct DiagnosticsWindowView: View {
     @ObservedObject var viewModel: DiagnosticsViewModel
 
@@ -74,6 +86,8 @@ struct DiagnosticsWindowView: View {
             logsTab
         case .history:
             historyTab
+        case .commands:
+            commandsTab
         }
     }
 
@@ -162,14 +176,14 @@ struct DiagnosticsWindowView: View {
                         .pickerStyle(.menu)
                         .frame(width: 180, alignment: .leading)
 
-                        TextField(
-                            "Filter logs",
+                        KeyboardFilterField(
+                            prompt: "Filter logs",
                             text: Binding(
                                 get: { viewModel.filterText },
                                 set: { viewModel.filterText = $0 }
                             )
                         )
-                        .textFieldStyle(.roundedBorder)
+                        .frame(minWidth: 220)
 
                         Spacer(minLength: 0)
                     }
@@ -254,6 +268,75 @@ struct DiagnosticsWindowView: View {
             }
 
             Text("Showing last 7 days. Older events are in the log file.")
+                .font(.system(size: 11, weight: .regular))
+                .foregroundStyle(.tertiary)
+                .padding(.top, 12)
+        }
+    }
+
+    private var commandsTab: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            DiagnosticsSection(title: "COMMAND HISTORY", topPadding: 0) {
+                DiagnosticsCard {
+                    HStack(spacing: 12) {
+                        Toggle(
+                            "Show status polls",
+                            isOn: Binding(
+                                get: { viewModel.showStatusPollCommands },
+                                set: { viewModel.showStatusPollCommands = $0 }
+                            )
+                        )
+                        .toggleStyle(.switch)
+                        .font(.system(size: 12, weight: .regular))
+
+                        Spacer(minLength: 0)
+
+                        Text("\(viewModel.visibleCommandItems.count) shown")
+                            .font(.system(size: 11, weight: .regular))
+                            .foregroundStyle(.tertiary)
+                    }
+                    .padding(.bottom, 10)
+
+                    if viewModel.isLoadingCommands && viewModel.commandItems.isEmpty {
+                        HStack {
+                            Spacer()
+                            ProgressView()
+                                .controlSize(.small)
+                            Spacer()
+                        }
+                        .padding(.vertical, 20)
+                    } else if viewModel.visibleCommandItems.isEmpty {
+                        Text(viewModel.showStatusPollCommands ? "No commands recorded in the last 24 hours." : "No non-polling commands recorded in the last 24 hours.")
+                            .font(.system(size: 12, weight: .regular))
+                            .foregroundStyle(.secondary)
+                            .padding(12)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    } else {
+                        ForEach(Array(viewModel.visibleCommandItems.enumerated()), id: \.element.id) { index, item in
+                            DiagnosticsCommandRow(
+                                item: item,
+                                detail: viewModel.commandDetail(for: item.id),
+                                isExpanded: viewModel.expandedCommandIDs.contains(item.id),
+                                isLoadingDetail: viewModel.loadingCommandDetailIDs.contains(item.id),
+                                action: { viewModel.toggleCommandExpansion(item) }
+                            )
+
+                            if index < viewModel.visibleCommandItems.count - 1 {
+                                DiagnosticsInsetDivider()
+                            }
+                        }
+                    }
+                }
+            }
+
+            if let commandErrorMessage = viewModel.commandErrorMessage, !commandErrorMessage.isEmpty {
+                Text(commandErrorMessage)
+                    .font(.system(size: 12, weight: .regular))
+                    .foregroundStyle(.secondary)
+                    .padding(.top, 12)
+            }
+
+            Text("Showing last 24 hours. Command logs are retained for 24 hours only.")
                 .font(.system(size: 11, weight: .regular))
                 .foregroundStyle(.tertiary)
                 .padding(.top, 12)
@@ -509,7 +592,7 @@ private struct DiagnosticsLogLine: View {
                     .foregroundStyle(levelColor)
             }
 
-            Text(entry.messageText)
+            Text(entry.text)
                 .font(.system(size: 11, weight: .regular, design: .monospaced))
                 .foregroundStyle(Color.white.opacity(0.9))
                 .textSelection(.enabled)
@@ -592,6 +675,204 @@ private struct DiagnosticsHistoryRow: View {
         formatter.timeStyle = .short
         return formatter
     }()
+}
+
+private struct DiagnosticsCommandRow: View {
+    let item: CommandHistorySummaryItem
+    let detail: CommandHistoryDetailItem?
+    let isExpanded: Bool
+    let isLoadingDetail: Bool
+    let action: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Button(action: action) {
+                HStack(alignment: .top, spacing: 10) {
+                    Circle()
+                        .fill(color)
+                        .frame(width: 8, height: 8)
+                        .padding(.top, 4)
+
+                    VStack(alignment: .leading, spacing: 5) {
+                        HStack(alignment: .firstTextBaseline, spacing: 8) {
+                            Text(item.abbreviatedCommandText)
+                                .font(.system(size: 12, weight: .medium, design: .monospaced))
+                                .foregroundStyle(.primary)
+                                .lineLimit(2)
+
+                            if item.hasTruncatedOutput {
+                                Text("truncated")
+                                    .font(.system(size: 10, weight: .semibold))
+                                    .padding(.horizontal, 6)
+                                    .padding(.vertical, 2)
+                                    .background(
+                                        Capsule(style: .continuous)
+                                            .fill(Color.orange.opacity(0.18))
+                                    )
+                                    .foregroundStyle(Color.orange)
+                            }
+
+                            Spacer(minLength: 0)
+
+                            Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                                .font(.system(size: 10, weight: .semibold))
+                                .foregroundStyle(.tertiary)
+                        }
+
+                        HStack(spacing: 10) {
+                            Text(item.source.title)
+                            Text(item.resultText)
+                            Text(durationText)
+                            Text(timestampText)
+                        }
+                        .font(.system(size: 11, weight: .regular))
+                        .foregroundStyle(.secondary)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 9)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            if isExpanded {
+                VStack(alignment: .leading, spacing: 10) {
+                    if isLoadingDetail && detail == nil {
+                        HStack {
+                            ProgressView()
+                                .controlSize(.small)
+                            Text("Loading details...")
+                                .font(.system(size: 11, weight: .regular))
+                                .foregroundStyle(.secondary)
+                        }
+                    } else if let detail {
+                        DiagnosticsCommandMetadataRow(title: "Command", value: detail.summary.commandText)
+                        DiagnosticsCommandMetadataRow(title: "Started", value: Self.dateTimeFormatter.string(from: detail.startedAt))
+                        DiagnosticsCommandMetadataRow(title: "Finished", value: Self.dateTimeFormatter.string(from: detail.finishedAt))
+                        DiagnosticsCommandMetadataRow(title: "Duration", value: durationText(for: detail.durationMs))
+                        DiagnosticsCommandMetadataRow(title: "Status", value: detail.summary.resultText)
+
+                        if let context = detail.context?.nilIfEmpty {
+                            DiagnosticsCommandMetadataRow(title: "Context", value: context)
+                        }
+
+                        if let namespace = detail.namespace?.nilIfEmpty {
+                            DiagnosticsCommandMetadataRow(title: "Namespace", value: namespace)
+                        }
+
+                        DiagnosticsCommandOutputBlock(
+                            title: detail.stdoutTruncated ? "stdout (truncated)" : "stdout",
+                            text: detail.stdout
+                        )
+                        DiagnosticsCommandOutputBlock(
+                            title: detail.stderrTruncated ? "stderr (truncated)" : "stderr",
+                            text: detail.stderr
+                        )
+                    }
+                }
+                .padding(.horizontal, 30)
+                .padding(.bottom, 10)
+            }
+        }
+    }
+
+    private var color: Color {
+        switch item.resultState {
+        case .success:
+            return .green
+        case .nonZeroExit:
+            return .orange
+        case .timeout, .launchFailure:
+            return .red
+        }
+    }
+
+    private var timestampText: String {
+        if Calendar.current.isDateInToday(item.startedAt) {
+            return Self.todayTimeFormatter.string(from: item.startedAt)
+        }
+
+        return Self.dateTimeFormatter.string(from: item.startedAt)
+    }
+
+    private var durationText: String {
+        durationText(for: item.durationMs)
+    }
+
+    private func durationText(for durationMs: Int64) -> String {
+        if durationMs >= 1000 {
+            return String(format: "%.2fs", Double(durationMs) / 1000)
+        }
+
+        return "\(durationMs)ms"
+    }
+
+    private static let todayTimeFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.timeStyle = .short
+        formatter.dateStyle = .none
+        return formatter
+    }()
+
+    private static let dateTimeFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .medium
+        return formatter
+    }()
+}
+
+private struct DiagnosticsCommandMetadataRow: View {
+    let title: String
+    let value: String
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            Text(title)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(.secondary)
+                .frame(width: 62, alignment: .leading)
+
+            Text(value)
+                .font(.system(size: 11, weight: .regular, design: .monospaced))
+                .foregroundStyle(.primary)
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+}
+
+private struct DiagnosticsCommandOutputBlock: View {
+    let title: String
+    let text: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(title.uppercased())
+                .font(.system(size: 10, weight: .medium))
+                .foregroundStyle(Color(nsColor: .tertiaryLabelColor))
+                .tracking(0.4)
+
+            if text.isEmpty {
+                Text("Empty")
+                    .font(.system(size: 11, weight: .regular, design: .monospaced))
+                    .foregroundStyle(.secondary)
+            } else {
+                ScrollView {
+                    Text(text)
+                        .font(.system(size: 11, weight: .regular, design: .monospaced))
+                        .foregroundStyle(.primary)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(10)
+                }
+                .frame(minHeight: 44, maxHeight: 140)
+                .background(Color(nsColor: .textBackgroundColor))
+                .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+            }
+        }
+    }
 }
 
 private struct DiagnosticsWindowConfigurator: NSViewRepresentable {

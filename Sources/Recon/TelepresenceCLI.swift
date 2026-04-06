@@ -45,7 +45,11 @@ actor TelepresenceCLI {
         self.environmentResolver = environmentResolver
     }
 
-    func fetchStatus() async -> TelepresenceStatusSnapshot {
+    func fetchStatus(
+        source: CommandHistorySource = .statusCheck,
+        context: String? = nil,
+        namespace: String? = nil
+    ) async -> TelepresenceStatusSnapshot {
         guard let executable = await resolveExecutable() else {
             return TelepresenceStatusSnapshot(
                 state: .unavailable,
@@ -59,7 +63,8 @@ actor TelepresenceCLI {
             let result = try await ProcessRunner.run(
                 executable: executable,
                 arguments: ["status", "--output", "json"],
-                environment: await environmentResolver.executionEnvironment()
+                environment: await environmentResolver.executionEnvironment(),
+                metadata: ProcessRunMetadata(source: source, context: context, namespace: namespace)
             )
 
             guard result.exitCode == 0 else {
@@ -102,7 +107,10 @@ actor TelepresenceCLI {
         }
     }
 
-    func fetchDiagnosticsStatus() async throws -> TelepresenceDiagnosticsFetchResult {
+    func fetchDiagnosticsStatus(
+        context: String? = nil,
+        namespace: String? = nil
+    ) async throws -> TelepresenceDiagnosticsFetchResult {
         guard let executable = await resolveExecutable() else {
             return TelepresenceDiagnosticsFetchResult(
                 status: nil,
@@ -114,7 +122,8 @@ actor TelepresenceCLI {
         let result = try await ProcessRunner.run(
             executable: executable,
             arguments: ["status", "--output", "json"],
-            environment: await environmentResolver.executionEnvironment()
+            environment: await environmentResolver.executionEnvironment(),
+            metadata: ProcessRunMetadata(source: .diagnostics, context: context, namespace: namespace)
         )
 
         guard result.exitCode == 0 else {
@@ -142,7 +151,10 @@ actor TelepresenceCLI {
         )
     }
 
-    func exportDiagnosticBundle() async -> DiagnosticExportOutcome {
+    func exportDiagnosticBundle(
+        context: String? = nil,
+        namespace: String? = nil
+    ) async -> DiagnosticExportOutcome {
         guard let executable = await resolveExecutable() else {
             return DiagnosticExportOutcome(
                 success: false,
@@ -159,7 +171,8 @@ actor TelepresenceCLI {
             let result = try await ProcessRunner.run(
                 executable: executable,
                 arguments: ["gather-logs", "--output-file", outputURL.path],
-                environment: await environmentResolver.executionEnvironment()
+                environment: await environmentResolver.executionEnvironment(),
+                metadata: ProcessRunMetadata(source: .diagnostics, context: context, namespace: namespace)
             )
 
             guard result.exitCode == 0 else {
@@ -207,7 +220,8 @@ actor TelepresenceCLI {
             let quitResult = try await ProcessRunner.run(
                 executable: executable,
                 arguments: ["quit", "--stop-daemons"],
-                environment: environment
+                environment: environment,
+                metadata: ProcessRunMetadata(source: .telepresenceAction)
             )
 
             if quitResult.exitCode != 0 {
@@ -225,7 +239,8 @@ actor TelepresenceCLI {
             let connectResult = try await ProcessRunner.run(
                 executable: executable,
                 arguments: await connectArguments(namespace: namespace),
-                environment: environment
+                environment: environment,
+                metadata: ProcessRunMetadata(source: .telepresenceAction, namespace: namespace)
             )
 
             guard connectResult.exitCode == 0 else {
@@ -276,7 +291,8 @@ actor TelepresenceCLI {
             let result = try await ProcessRunner.run(
                 executable: kubectl,
                 arguments: ["config", "current-context"],
-                environment: await environmentResolver.executionEnvironment()
+                environment: await environmentResolver.executionEnvironment(),
+                metadata: ProcessRunMetadata(source: .telepresenceAction)
             )
 
             guard result.exitCode == 0 else {
@@ -303,7 +319,11 @@ actor TelepresenceCLI {
             let result = try await ProcessRunner.run(
                 executable: executable,
                 arguments: arguments,
-                environment: await environmentResolver.executionEnvironment()
+                environment: await environmentResolver.executionEnvironment(),
+                metadata: ProcessRunMetadata(
+                    source: .telepresenceAction,
+                    namespace: namespaceArgument(in: arguments)
+                )
             )
 
             guard result.exitCode == 0 else {
@@ -376,6 +396,15 @@ actor TelepresenceCLI {
         }
 
         return line
+    }
+
+    private func namespaceArgument(in arguments: [String]) -> String? {
+        guard let namespaceIndex = arguments.firstIndex(of: "--namespace"),
+              arguments.indices.contains(namespaceIndex + 1) else {
+            return nil
+        }
+
+        return arguments[namespaceIndex + 1].nilIfEmpty
     }
 
     private func extractLogPaths(from output: String) -> [String] {

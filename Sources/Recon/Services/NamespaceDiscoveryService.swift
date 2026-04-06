@@ -53,9 +53,10 @@ actor NamespaceDiscoveryService {
         do {
             let result = try await ProcessRunner.run(
                 executable: kubectl,
-                arguments: ["get", "namespaces", "-o", "jsonpath={.items[*].metadata.name}"],
+                arguments: ["--request-timeout=5s", "get", "namespaces", "-o", "jsonpath={.items[*].metadata.name}"],
                 environment: await environmentResolver.executionEnvironment(),
-                timeout: .seconds(5)
+                timeout: .seconds(5),
+                metadata: ProcessRunMetadata(source: .namespaceDiscovery, context: context)
             )
 
             guard result.exitCode == 0 else {

@@ -4,6 +4,7 @@ import SwiftUI
 enum AppWindowID {
     static let preferences = "preferences"
     static let diagnostics = "diagnostics"
+    static let cluster = "cluster"
 }
 
 @MainActor

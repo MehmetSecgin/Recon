@@ -19,8 +19,19 @@ struct AppInstaller {
     private let repository: String
     private let installerScriptURL: URL
     private let installDirectoryURL: URL
+    private let processLauncher: (Process) throws -> Void
+    private let appOpener: (URL) -> Void
 
-    init(bundle: Bundle = .main, fileManager: FileManager = .default) {
+    init(
+        bundle: Bundle = .main,
+        fileManager: FileManager = .default,
+        processLauncher: @escaping (Process) throws -> Void = { process in
+            try process.run()
+        },
+        appOpener: @escaping (URL) -> Void = { url in
+            NSWorkspace.shared.open(url)
+        }
+    ) {
         repository = (bundle.object(forInfoDictionaryKey: "ReconGitHubRepository") as? String)?
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .nonEmpty ?? "mehmetsecgin/Recon"
@@ -35,6 +46,8 @@ struct AppInstaller {
         }
 
         installDirectoryURL = fileManager.homeDirectoryForCurrentUser.appendingPathComponent("Applications", isDirectory: true)
+        self.processLauncher = processLauncher
+        self.appOpener = appOpener
     }
 
     var installedAppURL: URL {
@@ -55,7 +68,8 @@ struct AppInstaller {
             executable: "/bin/bash",
             arguments: ["-lc", command],
             environment: environment,
-            timeout: .seconds(10 * 60)
+            timeout: .seconds(10 * 60),
+            metadata: ProcessRunMetadata(source: .appInstall)
         )
 
         guard result.exitCode == 0 else {
@@ -72,9 +86,9 @@ struct AppInstaller {
         ]
 
         do {
-            try process.run()
+            try processLauncher(process)
         } catch {
-            NSWorkspace.shared.open(installedAppURL)
+            appOpener(installedAppURL)
         }
     }
 }

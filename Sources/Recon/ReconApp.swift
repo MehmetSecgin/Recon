@@ -5,19 +5,35 @@ import SwiftUI
 struct ReconApp: App {
     @StateObject private var settingsStore: AppSettingsStore
     @StateObject private var controller: TelepresenceController
-    @StateObject private var diagnosticsViewModel: DiagnosticsViewModel
+    private let diagnosticsEventRecorder: DiagnosticsEventRecorder
+    private let browserConfigService: BrowserConfigService
+    private let appActivationPolicyController: AppActivationPolicyController
 
     init() {
         let settingsStore = AppSettingsStore()
-        let controller = TelepresenceController(settingsStore: settingsStore)
+        let environmentResolver = CommandEnvironmentResolver()
+        let controller = TelepresenceController(
+            settingsStore: settingsStore,
+            environmentResolver: environmentResolver
+        )
+        browserConfigService = BrowserConfigService(
+            settingsStore: settingsStore,
+            environmentResolver: environmentResolver
+        )
+        appActivationPolicyController = AppActivationPolicyController()
         _settingsStore = StateObject(wrappedValue: settingsStore)
         _controller = StateObject(wrappedValue: controller)
-        _diagnosticsViewModel = StateObject(wrappedValue: DiagnosticsViewModel(controller: controller))
+        diagnosticsEventRecorder = DiagnosticsEventRecorder(controller: controller)
     }
 
     var body: some Scene {
+        let _ = diagnosticsEventRecorder
+
         MenuBarExtra {
-            ReconMenuView(controller: controller)
+            ReconMenuView(
+                controller: controller,
+                appActivationPolicyController: appActivationPolicyController
+            )
         } label: {
             Text(controller.statusItemTitle)
                 .font(.system(size: 13, weight: .semibold, design: .monospaced))
@@ -28,16 +44,30 @@ struct ReconApp: App {
         }
 
         Window("Recon — Preferences", id: AppWindowID.preferences) {
-            PreferencesWindowView(controller: controller, settingsStore: settingsStore)
+            PreferencesWindowView(
+                controller: controller,
+                settingsStore: settingsStore,
+                browserConfigService: browserConfigService
+            )
         }
         .defaultSize(width: 500, height: 400)
         .windowResizability(.contentSize)
 
         Window("Recon — Diagnostics", id: AppWindowID.diagnostics) {
-            DiagnosticsWindowView(viewModel: diagnosticsViewModel)
+            DiagnosticsWindowSceneView(controller: controller)
         }
         .defaultSize(width: 560, height: 520)
         .windowResizability(.contentSize)
+
+        Window("Recon - Deck", id: AppWindowID.cluster) {
+            ClusterBrowserWindowSceneView(
+                settingsStore: settingsStore,
+                browserConfigService: browserConfigService,
+                appActivationPolicyController: appActivationPolicyController
+            )
+        }
+        .defaultSize(width: 960, height: 700)
+        .windowResizability(.contentMinSize)
     }
 }
 
