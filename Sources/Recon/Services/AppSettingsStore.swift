@@ -10,32 +10,6 @@ final class AppSettingsStore: ObservableObject {
         let kubectlPathOverride: String?
     }
 
-    private enum DefaultsKey {
-        static let selectedKubeconfigPath = "Recon.SelectedKubeconfigPath"
-        static let rememberedKubeconfigPaths = "Recon.RememberedKubeconfigPaths"
-        static let namespaceOverridesByContext = "Recon.NamespaceOverridesByContext"
-        static let recentNamespacesByContext = "Recon.RecentNamespacesByContext"
-        static let browserKubeconfigPaths = "Recon.BrowserKubeconfigPaths"
-        static let browserHasExplicitKubeconfigSources = "Recon.BrowserHasExplicitKubeconfigSources"
-        static let browserLastSelectedContextID = "Recon.BrowserLastSelectedContextID"
-        static let browserSelectedNamespacesByContextID = "Recon.BrowserSelectedNamespacesByContextID"
-        static let browserRecentNamespacesByContextID = "Recon.BrowserRecentNamespacesByContextID"
-        static let browserHiddenNamespacesByContextID = "Recon.BrowserHiddenNamespacesByContextID"
-        static let hasExplicitKubeconfigSelection = "Recon.HasExplicitKubeconfigSelection"
-        static let pollingIntervalSeconds = "Recon.PollingIntervalSeconds"
-        static let autoReconnectEnabled = "Recon.AutoReconnectEnabled"
-        static let notificationsEnabled = "Recon.NotificationsEnabled"
-        static let autoConnectOnLaunchEnabled = "Recon.AutoConnectOnLaunchEnabled"
-        static let telepresencePathOverride = "Recon.TelepresencePathOverride"
-        static let kubectlPathOverride = "Recon.KubectlPathOverride"
-        static let kubeconfigPreferenceMode = "Recon.KubeconfigPreferenceMode"
-        static let notifyConnectionEstablished = "Recon.Notify.ConnectionEstablished"
-        static let notifyConnectionDropped = "Recon.Notify.ConnectionDropped"
-        static let notifyAutoReconnectFailed = "Recon.Notify.AutoReconnectFailed"
-        static let notifyAutoConnectFailed = "Recon.Notify.AutoConnectFailed"
-        static let appUpdateSectionDismissed = "Recon.AppUpdateSectionDismissed"
-    }
-
     @Published private(set) var launchAtLoginEnabled: Bool
     @Published private(set) var autoConnectOnLaunchEnabled: Bool
     @Published private(set) var autoReconnectEnabled: Bool
@@ -55,43 +29,39 @@ final class AppSettingsStore: ObservableObject {
     @Published private(set) var notificationToggles: [AppNotificationEvent: Bool]
     @Published private(set) var appUpdateSectionDismissed: Bool
 
-    private let defaults: UserDefaults
+    private let fileStore: AppSettingsFileStore
     private var browserHasExplicitKubeconfigSources: Bool
 
     init(
         defaults: UserDefaults = .standard,
+        fileStore: AppSettingsFileStore? = nil,
         launchAtLoginEnabled: Bool = LaunchAtLoginManager.isEnabled
     ) {
-        self.defaults = defaults
+        self.fileStore = fileStore ?? AppSettingsFileStore(defaults: defaults)
+        let persisted = self.fileStore.load()
         self.launchAtLoginEnabled = launchAtLoginEnabled
-        autoConnectOnLaunchEnabled = defaults.object(forKey: DefaultsKey.autoConnectOnLaunchEnabled) as? Bool ?? false
-        autoReconnectEnabled = defaults.object(forKey: DefaultsKey.autoReconnectEnabled) as? Bool ?? false
+        autoConnectOnLaunchEnabled = persisted.autoConnectOnLaunchEnabled
+        autoReconnectEnabled = persisted.autoReconnectEnabled
         pollingInterval = PollingIntervalOption.restored(
-            from: defaults.object(forKey: DefaultsKey.pollingIntervalSeconds) as? Int
+            from: persisted.pollingIntervalSeconds
         )
-        telepresencePathOverride = Self.normalize(path: defaults.string(forKey: DefaultsKey.telepresencePathOverride))
-        kubectlPathOverride = Self.normalize(path: defaults.string(forKey: DefaultsKey.kubectlPathOverride))
+        telepresencePathOverride = Self.normalize(path: persisted.telepresencePathOverride)
+        kubectlPathOverride = Self.normalize(path: persisted.kubectlPathOverride)
 
-        let storedMode = defaults.string(forKey: DefaultsKey.kubeconfigPreferenceMode)
-            .flatMap(KubeconfigPreferenceMode.init(rawValue:))
-        let hadExplicitSelection = defaults.object(forKey: DefaultsKey.hasExplicitKubeconfigSelection) as? Bool ?? false
-        let legacySelectedPath = hadExplicitSelection
-            ? Self.normalize(path: defaults.string(forKey: DefaultsKey.selectedKubeconfigPath))
-            : nil
-        kubeconfigPreferenceMode = storedMode ?? .pinned
-        selectedKubeconfigPath = legacySelectedPath
+        kubeconfigPreferenceMode = KubeconfigPreferenceMode(rawValue: persisted.kubeconfigPreferenceModeRawValue) ?? .pinned
+        selectedKubeconfigPath = Self.normalize(path: persisted.selectedKubeconfigPath)
 
-        rememberedKubeconfigPaths = Self.normalize(paths: defaults.stringArray(forKey: DefaultsKey.rememberedKubeconfigPaths) ?? [])
-        namespaceOverridesByContext = Self.normalize(namespaceOverrides: defaults.dictionary(forKey: DefaultsKey.namespaceOverridesByContext) as? [String: String] ?? [:])
-        recentNamespacesByContext = Self.normalize(recentNamespacesByContext: defaults.dictionary(forKey: DefaultsKey.recentNamespacesByContext) as? [String: [String]] ?? [:])
-        browserKubeconfigPaths = Self.normalize(paths: defaults.stringArray(forKey: DefaultsKey.browserKubeconfigPaths) ?? [])
-        browserHasExplicitKubeconfigSources = defaults.object(forKey: DefaultsKey.browserHasExplicitKubeconfigSources) as? Bool ?? false
-        browserLastSelectedContextID = Self.normalize(contextKey: defaults.string(forKey: DefaultsKey.browserLastSelectedContextID))
-        browserSelectedNamespacesByContextID = Self.normalize(namespaceOverrides: defaults.dictionary(forKey: DefaultsKey.browserSelectedNamespacesByContextID) as? [String: String] ?? [:])
-        browserRecentNamespacesByContextID = Self.normalize(recentNamespacesByContext: defaults.dictionary(forKey: DefaultsKey.browserRecentNamespacesByContextID) as? [String: [String]] ?? [:])
-        browserHiddenNamespacesByContextID = Self.normalize(recentNamespacesByContext: defaults.dictionary(forKey: DefaultsKey.browserHiddenNamespacesByContextID) as? [String: [String]] ?? [:])
-        notificationToggles = Self.loadNotificationToggles(from: defaults)
-        appUpdateSectionDismissed = defaults.object(forKey: DefaultsKey.appUpdateSectionDismissed) as? Bool ?? false
+        rememberedKubeconfigPaths = Self.normalize(paths: persisted.rememberedKubeconfigPaths)
+        namespaceOverridesByContext = Self.normalize(namespaceOverrides: persisted.namespaceOverridesByContext)
+        recentNamespacesByContext = Self.normalize(recentNamespacesByContext: persisted.recentNamespacesByContext)
+        browserKubeconfigPaths = Self.normalize(paths: persisted.browserKubeconfigPaths)
+        browserHasExplicitKubeconfigSources = persisted.browserHasExplicitKubeconfigSources
+        browserLastSelectedContextID = Self.normalize(contextKey: persisted.browserLastSelectedContextID)
+        browserSelectedNamespacesByContextID = Self.normalize(namespaceOverrides: persisted.browserSelectedNamespacesByContextID)
+        browserRecentNamespacesByContextID = Self.normalize(recentNamespacesByContext: persisted.browserRecentNamespacesByContextID)
+        browserHiddenNamespacesByContextID = Self.normalize(hiddenNamespacesByContext: persisted.browserHiddenNamespacesByContextID)
+        notificationToggles = Self.normalize(notificationToggles: persisted.notificationToggles)
+        appUpdateSectionDismissed = persisted.appUpdateSectionDismissed
 
         persistCanonicalState()
     }
@@ -112,45 +82,45 @@ final class AppSettingsStore: ObservableObject {
     func setAutoConnectOnLaunchEnabled(_ enabled: Bool) {
         guard autoConnectOnLaunchEnabled != enabled else { return }
         autoConnectOnLaunchEnabled = enabled
-        defaults.set(enabled, forKey: DefaultsKey.autoConnectOnLaunchEnabled)
+        persistCanonicalState()
     }
 
     func setAutoReconnectEnabled(_ enabled: Bool) {
         guard autoReconnectEnabled != enabled else { return }
         autoReconnectEnabled = enabled
-        defaults.set(enabled, forKey: DefaultsKey.autoReconnectEnabled)
+        persistCanonicalState()
     }
 
     func setPollingInterval(_ option: PollingIntervalOption) {
         guard pollingInterval != option else { return }
         pollingInterval = option
-        defaults.set(option.rawValue, forKey: DefaultsKey.pollingIntervalSeconds)
+        persistCanonicalState()
     }
 
     func setNotificationEnabled(_ enabled: Bool, for event: AppNotificationEvent) {
         guard isNotificationEnabled(for: event) != enabled else { return }
         notificationToggles[event] = enabled
-        defaults.set(enabled, forKey: defaultsKey(for: event))
+        persistCanonicalState()
     }
 
     func setTelepresencePathOverride(_ path: String?) {
         let normalizedPath = Self.normalize(path: path)
         guard telepresencePathOverride != normalizedPath else { return }
         telepresencePathOverride = normalizedPath
-        persist(path: normalizedPath, key: DefaultsKey.telepresencePathOverride)
+        persistCanonicalState()
     }
 
     func setKubectlPathOverride(_ path: String?) {
         let normalizedPath = Self.normalize(path: path)
         guard kubectlPathOverride != normalizedPath else { return }
         kubectlPathOverride = normalizedPath
-        persist(path: normalizedPath, key: DefaultsKey.kubectlPathOverride)
+        persistCanonicalState()
     }
 
     func setKubeconfigPreferenceMode(_ mode: KubeconfigPreferenceMode) {
         guard kubeconfigPreferenceMode != mode else { return }
         kubeconfigPreferenceMode = mode
-        defaults.set(mode.rawValue, forKey: DefaultsKey.kubeconfigPreferenceMode)
+        persistCanonicalState()
     }
 
     func setPinnedKubeconfigPath(_ path: String?) {
@@ -161,9 +131,7 @@ final class AppSettingsStore: ObservableObject {
 
         selectedKubeconfigPath = normalizedPath
         kubeconfigPreferenceMode = .pinned
-        persist(path: normalizedPath, key: DefaultsKey.selectedKubeconfigPath)
-        defaults.set(normalizedPath != nil, forKey: DefaultsKey.hasExplicitKubeconfigSelection)
-        defaults.set(KubeconfigPreferenceMode.pinned.rawValue, forKey: DefaultsKey.kubeconfigPreferenceMode)
+        persistCanonicalState()
     }
 
     func followEnvironmentForKubeconfig() {
@@ -173,16 +141,14 @@ final class AppSettingsStore: ObservableObject {
 
         kubeconfigPreferenceMode = .followEnvironment
         selectedKubeconfigPath = nil
-        defaults.set(KubeconfigPreferenceMode.followEnvironment.rawValue, forKey: DefaultsKey.kubeconfigPreferenceMode)
-        defaults.removeObject(forKey: DefaultsKey.selectedKubeconfigPath)
-        defaults.set(false, forKey: DefaultsKey.hasExplicitKubeconfigSelection)
+        persistCanonicalState()
     }
 
     func setRememberedKubeconfigPaths(_ paths: [String]) {
         let normalizedPaths = Self.normalize(paths: paths)
         guard rememberedKubeconfigPaths != normalizedPaths else { return }
         rememberedKubeconfigPaths = normalizedPaths
-        defaults.set(normalizedPaths, forKey: DefaultsKey.rememberedKubeconfigPaths)
+        persistCanonicalState()
     }
 
     var hasExplicitBrowserKubeconfigSources: Bool {
@@ -196,8 +162,7 @@ final class AppSettingsStore: ObservableObject {
         guard browserKubeconfigPaths != normalizedPaths else { return }
 
         browserKubeconfigPaths = normalizedPaths
-        defaults.set(normalizedPaths, forKey: DefaultsKey.browserKubeconfigPaths)
-        defaults.set(false, forKey: DefaultsKey.browserHasExplicitKubeconfigSources)
+        persistCanonicalState()
     }
 
     func setBrowserKubeconfigPaths(_ paths: [String], isExplicit: Bool = true) {
@@ -208,20 +173,14 @@ final class AppSettingsStore: ObservableObject {
 
         browserKubeconfigPaths = normalizedPaths
         browserHasExplicitKubeconfigSources = isExplicit
-        defaults.set(normalizedPaths, forKey: DefaultsKey.browserKubeconfigPaths)
-        defaults.set(isExplicit, forKey: DefaultsKey.browserHasExplicitKubeconfigSources)
+        persistCanonicalState()
     }
 
     func setBrowserLastSelectedContextID(_ contextID: String?) {
         let normalizedContextID = Self.normalize(contextKey: contextID)
         guard browserLastSelectedContextID != normalizedContextID else { return }
         browserLastSelectedContextID = normalizedContextID
-
-        if let normalizedContextID {
-            defaults.set(normalizedContextID, forKey: DefaultsKey.browserLastSelectedContextID)
-        } else {
-            defaults.removeObject(forKey: DefaultsKey.browserLastSelectedContextID)
-        }
+        persistCanonicalState()
     }
 
     func browserSelectedNamespace(for contextID: String) -> String? {
@@ -240,7 +199,7 @@ final class AppSettingsStore: ObservableObject {
 
         guard browserSelectedNamespacesByContextID[normalizedContextID] != normalizedNamespace else { return }
         browserSelectedNamespacesByContextID[normalizedContextID] = normalizedNamespace
-        defaults.set(browserSelectedNamespacesByContextID, forKey: DefaultsKey.browserSelectedNamespacesByContextID)
+        persistCanonicalState()
     }
 
     func browserRecentNamespaces(for contextID: String) -> [String] {
@@ -266,7 +225,7 @@ final class AppSettingsStore: ObservableObject {
 
         guard browserRecentNamespacesByContextID[normalizedContextID] != updated else { return }
         browserRecentNamespacesByContextID[normalizedContextID] = updated
-        defaults.set(browserRecentNamespacesByContextID, forKey: DefaultsKey.browserRecentNamespacesByContextID)
+        persistCanonicalState()
     }
 
     func browserHiddenNamespaces(for contextID: String) -> [String] {
@@ -297,7 +256,7 @@ final class AppSettingsStore: ObservableObject {
             browserHiddenNamespacesByContextID[normalizedContextID] = normalizedHiddenNamespaces
         }
 
-        defaults.set(browserHiddenNamespacesByContextID, forKey: DefaultsKey.browserHiddenNamespacesByContextID)
+        persistCanonicalState()
     }
 
     func setBrowserHiddenNamespaces(_ namespaces: [String], for contextID: String) {
@@ -320,7 +279,7 @@ final class AppSettingsStore: ObservableObject {
             browserHiddenNamespacesByContextID[normalizedContextID] = storedNamespaces
         }
 
-        defaults.set(browserHiddenNamespacesByContextID, forKey: DefaultsKey.browserHiddenNamespacesByContextID)
+        persistCanonicalState()
     }
 
     func override(for context: String) -> String? {
@@ -339,7 +298,7 @@ final class AppSettingsStore: ObservableObject {
 
         guard namespaceOverridesByContext[normalizedContext] != normalizedNamespace else { return }
         namespaceOverridesByContext[normalizedContext] = normalizedNamespace
-        defaults.set(namespaceOverridesByContext, forKey: DefaultsKey.namespaceOverridesByContext)
+        persistCanonicalState()
     }
 
     func clearOverride(for context: String) {
@@ -348,7 +307,7 @@ final class AppSettingsStore: ObservableObject {
             return
         }
 
-        defaults.set(namespaceOverridesByContext, forKey: DefaultsKey.namespaceOverridesByContext)
+        persistCanonicalState()
     }
 
     func recentNamespaces(for context: String) -> [String] {
@@ -374,13 +333,13 @@ final class AppSettingsStore: ObservableObject {
 
         guard recentNamespacesByContext[normalizedContext] != updated else { return }
         recentNamespacesByContext[normalizedContext] = updated
-        defaults.set(recentNamespacesByContext, forKey: DefaultsKey.recentNamespacesByContext)
+        persistCanonicalState()
     }
 
     func setAppUpdateSectionDismissed(_ dismissed: Bool) {
         guard appUpdateSectionDismissed != dismissed else { return }
         appUpdateSectionDismissed = dismissed
-        defaults.set(dismissed, forKey: DefaultsKey.appUpdateSectionDismissed)
+        persistCanonicalState()
     }
 
     func makeEnvironmentSnapshot() -> EnvironmentSettingsSnapshot {
@@ -393,82 +352,34 @@ final class AppSettingsStore: ObservableObject {
     }
 
     private func persistCanonicalState() {
-        defaults.set(pollingInterval.rawValue, forKey: DefaultsKey.pollingIntervalSeconds)
-        defaults.set(kubeconfigPreferenceMode.rawValue, forKey: DefaultsKey.kubeconfigPreferenceMode)
-        defaults.set(rememberedKubeconfigPaths, forKey: DefaultsKey.rememberedKubeconfigPaths)
-        defaults.set(namespaceOverridesByContext, forKey: DefaultsKey.namespaceOverridesByContext)
-        defaults.set(recentNamespacesByContext, forKey: DefaultsKey.recentNamespacesByContext)
-        defaults.set(browserKubeconfigPaths, forKey: DefaultsKey.browserKubeconfigPaths)
-        defaults.set(browserHasExplicitKubeconfigSources, forKey: DefaultsKey.browserHasExplicitKubeconfigSources)
-        defaults.set(browserSelectedNamespacesByContextID, forKey: DefaultsKey.browserSelectedNamespacesByContextID)
-        defaults.set(browserRecentNamespacesByContextID, forKey: DefaultsKey.browserRecentNamespacesByContextID)
-        defaults.set(browserHiddenNamespacesByContextID, forKey: DefaultsKey.browserHiddenNamespacesByContextID)
-        defaults.set(appUpdateSectionDismissed, forKey: DefaultsKey.appUpdateSectionDismissed)
-        persist(path: telepresencePathOverride, key: DefaultsKey.telepresencePathOverride)
-        persist(path: kubectlPathOverride, key: DefaultsKey.kubectlPathOverride)
-        persist(path: selectedKubeconfigPath, key: DefaultsKey.selectedKubeconfigPath)
-        defaults.set(selectedKubeconfigPath != nil, forKey: DefaultsKey.hasExplicitKubeconfigSelection)
-        if let browserLastSelectedContextID {
-            defaults.set(browserLastSelectedContextID, forKey: DefaultsKey.browserLastSelectedContextID)
-        } else {
-            defaults.removeObject(forKey: DefaultsKey.browserLastSelectedContextID)
-        }
-
-        for event in AppNotificationEvent.allCases {
-            defaults.set(isNotificationEnabled(for: event), forKey: defaultsKey(for: event))
+        do {
+            try fileStore.save(makePersistedSettings())
+        } catch {
+            reportPersistenceIssue("Failed to save app settings: \(error.localizedDescription)")
         }
     }
 
-    private func persist(path: String?, key: String) {
-        if let path {
-            defaults.set(path, forKey: key)
-        } else {
-            defaults.removeObject(forKey: key)
-        }
-    }
-
-    private func defaultsKey(for event: AppNotificationEvent) -> String {
-        switch event {
-        case .connectionEstablished:
-            return DefaultsKey.notifyConnectionEstablished
-        case .connectionDropped:
-            return DefaultsKey.notifyConnectionDropped
-        case .autoReconnectFailed:
-            return DefaultsKey.notifyAutoReconnectFailed
-        case .autoConnectFailed:
-            return DefaultsKey.notifyAutoConnectFailed
-        }
-    }
-
-    private static func loadNotificationToggles(from defaults: UserDefaults) -> [AppNotificationEvent: Bool] {
-        let perEventValues = AppNotificationEvent.allCases.reduce(into: [AppNotificationEvent: Bool]()) { result, event in
-            let key = defaultsKey(for: event)
-            if let storedValue = defaults.object(forKey: key) as? Bool {
-                result[event] = storedValue
-            }
-        }
-
-        if perEventValues.count == AppNotificationEvent.allCases.count {
-            return perEventValues
-        }
-
-        let legacyValue = defaults.object(forKey: DefaultsKey.notificationsEnabled) as? Bool ?? false
-        return AppNotificationEvent.allCases.reduce(into: [AppNotificationEvent: Bool]()) { result, event in
-            result[event] = perEventValues[event] ?? legacyValue
-        }
-    }
-
-    private static func defaultsKey(for event: AppNotificationEvent) -> String {
-        switch event {
-        case .connectionEstablished:
-            return DefaultsKey.notifyConnectionEstablished
-        case .connectionDropped:
-            return DefaultsKey.notifyConnectionDropped
-        case .autoReconnectFailed:
-            return DefaultsKey.notifyAutoReconnectFailed
-        case .autoConnectFailed:
-            return DefaultsKey.notifyAutoConnectFailed
-        }
+    private func makePersistedSettings() -> PersistedAppSettings {
+        PersistedAppSettings(
+            autoConnectOnLaunchEnabled: autoConnectOnLaunchEnabled,
+            autoReconnectEnabled: autoReconnectEnabled,
+            pollingIntervalSeconds: pollingInterval.rawValue,
+            telepresencePathOverride: telepresencePathOverride,
+            kubectlPathOverride: kubectlPathOverride,
+            kubeconfigPreferenceModeRawValue: kubeconfigPreferenceMode.rawValue,
+            selectedKubeconfigPath: selectedKubeconfigPath,
+            rememberedKubeconfigPaths: rememberedKubeconfigPaths,
+            namespaceOverridesByContext: namespaceOverridesByContext,
+            recentNamespacesByContext: recentNamespacesByContext,
+            browserKubeconfigPaths: browserKubeconfigPaths,
+            browserHasExplicitKubeconfigSources: browserHasExplicitKubeconfigSources,
+            browserLastSelectedContextID: browserLastSelectedContextID,
+            browserSelectedNamespacesByContextID: browserSelectedNamespacesByContextID,
+            browserRecentNamespacesByContextID: browserRecentNamespacesByContextID,
+            browserHiddenNamespacesByContextID: browserHiddenNamespacesByContextID,
+            notificationToggles: Self.serialize(notificationToggles: notificationToggles),
+            appUpdateSectionDismissed: appUpdateSectionDismissed
+        )
     }
 
     private static func normalize(path: String?) -> String? {
@@ -524,6 +435,37 @@ final class AppSettingsStore: ObservableObject {
 
             guard namespaces.isEmpty == false else { return }
             result[context] = Array(namespaces.prefix(10))
+        }
+    }
+
+    private static func normalize(hiddenNamespacesByContext: [String: [String]]) -> [String: [String]] {
+        hiddenNamespacesByContext.reduce(into: [String: [String]]()) { result, element in
+            guard let context = normalize(contextKey: element.key) else {
+                return
+            }
+
+            let namespaces = element.value
+                .compactMap { normalize(namespace: $0) }
+                .reduce(into: [String]()) { seenNamespaces, namespace in
+                    if seenNamespaces.contains(namespace) == false {
+                        seenNamespaces.append(namespace)
+                    }
+                }
+
+            guard namespaces.isEmpty == false else { return }
+            result[context] = Array(namespaces.prefix(200))
+        }
+    }
+
+    private static func normalize(notificationToggles: [String: Bool]) -> [AppNotificationEvent: Bool] {
+        AppNotificationEvent.allCases.reduce(into: [AppNotificationEvent: Bool]()) { result, event in
+            result[event] = notificationToggles[event.rawValue] ?? false
+        }
+    }
+
+    private static func serialize(notificationToggles: [AppNotificationEvent: Bool]) -> [String: Bool] {
+        notificationToggles.reduce(into: [String: Bool]()) { result, element in
+            result[element.key.rawValue] = element.value
         }
     }
 }

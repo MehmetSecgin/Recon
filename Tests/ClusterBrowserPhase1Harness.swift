@@ -19,6 +19,7 @@ struct ClusterBrowserPhase1Harness {
         try testKubectlConfigMapTableParsing()
         try testBrowserContextIdentity()
         try testBrowserNamespaceFallback()
+        try testHiddenNamespaceSelectionFallback()
         try testDuplicateContextBadges()
         try testSidebarFiltering()
 
@@ -289,6 +290,39 @@ struct ClusterBrowserPhase1Harness {
                 defaultNamespace: nil
             ) == "default",
             "Default fallback should be `default` when neither value exists"
+        )
+    }
+
+    private static func testHiddenNamespaceSelectionFallback() throws {
+        try expect(
+            BrowserVisibleNamespaceResolver.resolve(
+                currentNamespace: "develop",
+                defaultNamespace: "default",
+                recentNamespaces: ["develop", "payments"],
+                availableNamespaces: ["develop", "payments", "default"],
+                hiddenNamespaces: ["develop"]
+            ) == "default",
+            "Hidden remembered namespaces should fall back to the default namespace when visible"
+        )
+        try expect(
+            BrowserVisibleNamespaceResolver.resolve(
+                currentNamespace: "develop",
+                defaultNamespace: "default",
+                recentNamespaces: ["develop", "payments"],
+                availableNamespaces: ["develop", "payments", "default"],
+                hiddenNamespaces: ["develop", "default"]
+            ) == "payments",
+            "Fallback should continue to recent or available visible namespaces when default is also hidden"
+        )
+        try expect(
+            BrowserVisibleNamespaceResolver.resolve(
+                currentNamespace: "develop",
+                defaultNamespace: "default",
+                recentNamespaces: ["develop"],
+                availableNamespaces: ["develop"],
+                hiddenNamespaces: ["develop", "default"]
+            ) == "develop",
+            "If every known namespace is hidden, the current namespace should remain selected"
         )
     }
 

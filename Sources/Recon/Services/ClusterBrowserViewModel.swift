@@ -308,10 +308,7 @@ final class ClusterBrowserViewModel: ObservableObject {
     }
 
     func selectContext(_ context: BrowserContextDescriptor) {
-        let namespace = BrowserNamespaceSelectionResolver.resolve(
-            rememberedNamespace: settingsStore.browserSelectedNamespace(for: context.id),
-            defaultNamespace: context.defaultNamespace
-        )
+        let namespace = restoredNamespace(for: context)
 
         select(target: BrowserTarget(context: context, namespace: namespace), persistSelection: true, clearExistingData: true)
     }
@@ -376,6 +373,7 @@ final class ClusterBrowserViewModel: ObservableObject {
     func toggleNamespaceHidden(_ namespace: String, in context: BrowserContextDescriptor) {
         let isHidden = isNamespaceHidden(namespace, in: context)
         settingsStore.setBrowserNamespaceHidden(!isHidden, namespace: namespace, for: context.id)
+        reconcileSelectedNamespaceVisibility(in: context)
         objectWillChange.send()
     }
 
@@ -538,10 +536,7 @@ final class ClusterBrowserViewModel: ObservableObject {
            let context = contexts.first(where: { $0.id == lastSelectedContextID }) {
             return BrowserTarget(
                 context: context,
-                namespace: BrowserNamespaceSelectionResolver.resolve(
-                    rememberedNamespace: settingsStore.browserSelectedNamespace(for: context.id),
-                    defaultNamespace: context.defaultNamespace
-                )
+                namespace: restoredNamespace(for: context)
             )
         }
 
@@ -551,10 +546,7 @@ final class ClusterBrowserViewModel: ObservableObject {
 
         return BrowserTarget(
             context: firstContext,
-            namespace: BrowserNamespaceSelectionResolver.resolve(
-                rememberedNamespace: settingsStore.browserSelectedNamespace(for: firstContext.id),
-                defaultNamespace: firstContext.defaultNamespace
-            )
+            namespace: restoredNamespace(for: firstContext)
         )
     }
 
@@ -597,6 +589,7 @@ final class ClusterBrowserViewModel: ObservableObject {
                 let namespaces = try await self.browserConfigService.fetchNamespaces(for: context)
                 guard self.isWindowActive else { return }
                 self.contextLoadStates[context.id] = .loadedNamespaces(namespaces)
+                self.reconcileSelectedNamespaceVisibility(in: context)
             } catch is CancellationError {
                 return
             } catch {
@@ -620,6 +613,52 @@ final class ClusterBrowserViewModel: ObservableObject {
         for context in displayedBrowserContexts {
             loadNamespaces(for: context)
         }
+    }
+
+    private func restoredNamespace(for context: BrowserContextDescriptor) -> String {
+        let rememberedNamespace = BrowserNamespaceSelectionResolver.resolve(
+            rememberedNamespace: settingsStore.browserSelectedNamespace(for: context.id),
+            defaultNamespace: context.defaultNamespace
+        )
+        let hiddenNamespaces = Set(settingsStore.browserHiddenNamespaces(for: context.id))
+        let recentNamespaces = settingsStore.browserRecentNamespaces(for: context.id)
+
+        return BrowserVisibleNamespaceResolver.resolve(
+            currentNamespace: rememberedNamespace,
+            defaultNamespace: context.defaultNamespace,
+            recentNamespaces: recentNamespaces,
+            availableNamespaces: [],
+            hiddenNamespaces: hiddenNamespaces
+        )
+    }
+
+    private func reconcileSelectedNamespaceVisibility(in context: BrowserContextDescriptor) {
+        guard isNamespaceEditMode == false,
+              let selectedTarget,
+              selectedTarget.context.id == context.id else {
+            return
+        }
+
+        let hiddenNamespaces = Set(settingsStore.browserHiddenNamespaces(for: context.id))
+        let availableNamespaces = (contextLoadStates[context.id] ?? .idle).namespaces
+        let recentNamespaces = settingsStore.browserRecentNamespaces(for: context.id)
+        let resolvedNamespace = BrowserVisibleNamespaceResolver.resolve(
+            currentNamespace: selectedTarget.namespace,
+            defaultNamespace: context.defaultNamespace,
+            recentNamespaces: recentNamespaces,
+            availableNamespaces: availableNamespaces,
+            hiddenNamespaces: hiddenNamespaces
+        )
+
+        guard resolvedNamespace != selectedTarget.namespace else {
+            return
+        }
+
+        select(
+            target: BrowserTarget(context: context, namespace: resolvedNamespace),
+            persistSelection: true,
+            clearExistingData: true
+        )
     }
 
     private func startFetch(clearExistingData: Bool) {

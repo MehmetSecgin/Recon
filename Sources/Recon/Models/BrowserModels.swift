@@ -79,6 +79,41 @@ enum BrowserNamespaceSelectionResolver {
     }
 }
 
+enum BrowserVisibleNamespaceResolver {
+    static func resolve(
+        currentNamespace: String,
+        defaultNamespace: String?,
+        recentNamespaces: [String],
+        availableNamespaces: [String],
+        hiddenNamespaces: Set<String>
+    ) -> String {
+        guard hiddenNamespaces.contains(currentNamespace) else {
+            return currentNamespace
+        }
+
+        var candidates: [String] = []
+        if let defaultNamespace = defaultNamespace?.nilIfEmpty {
+            candidates.append(defaultNamespace)
+        }
+        candidates.append(contentsOf: recentNamespaces)
+        candidates.append(contentsOf: availableNamespaces)
+
+        var seen = Set<String>()
+        for candidate in candidates {
+            let trimmed = candidate.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard trimmed.isEmpty == false,
+                  hiddenNamespaces.contains(trimmed) == false,
+                  seen.insert(trimmed).inserted else {
+                continue
+            }
+
+            return trimmed
+        }
+
+        return currentNamespace
+    }
+}
+
 enum BrowserSidebarFiltering {
     static func matchesContext(
         _ context: BrowserContextDescriptor,
