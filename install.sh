@@ -6,7 +6,7 @@ REPO="${RECON_REPO:-mehmetsecgin/Recon}"
 APP_NAME="Recon.app"
 ASSET_NAME="${APP_NAME}.zip"
 INSTALL_DIR="${RECON_INSTALL_DIR:-$HOME/Applications}"
-LATEST_RELEASE_API="https://api.github.com/repos/${REPO}/releases/latest"
+ASSET_URL="https://github.com/${REPO}/releases/latest/download/${ASSET_NAME}"
 
 TMP_DIR="$(mktemp -d)"
 ZIP_PATH="${TMP_DIR}/${ASSET_NAME}"
@@ -19,26 +19,6 @@ cleanup() {
 trap cleanup EXIT
 
 echo "Fetching latest Recon release from ${REPO}..."
-
-ASSET_URL="$(
-  curl -fsSL "${LATEST_RELEASE_API}" |
-    python3 -c 'import json, sys
-release = json.load(sys.stdin)
-asset = next(
-    (
-        item["browser_download_url"]
-        for item in release.get("assets", [])
-        if item.get("name") == "Recon.app.zip"
-    ),
-    "",
-)
-print(asset)'
-)"
-
-if [[ -z "${ASSET_URL}" ]]; then
-  echo "Could not find a ${ASSET_NAME} asset in the latest GitHub Release for ${REPO}." >&2
-  exit 1
-fi
 
 mkdir -p "${INSTALL_DIR}" "${UNPACK_DIR}"
 
