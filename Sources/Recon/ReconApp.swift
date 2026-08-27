@@ -6,8 +6,6 @@ struct ReconApp: App {
     @StateObject private var settingsStore: AppSettingsStore
     @StateObject private var controller: TelepresenceController
     private let diagnosticsEventRecorder: DiagnosticsEventRecorder
-    private let browserConfigService: BrowserConfigService
-    private let appActivationPolicyController: AppActivationPolicyController
 
     init() {
         let settingsStore = AppSettingsStore()
@@ -16,11 +14,6 @@ struct ReconApp: App {
             settingsStore: settingsStore,
             environmentResolver: environmentResolver
         )
-        browserConfigService = BrowserConfigService(
-            settingsStore: settingsStore,
-            environmentResolver: environmentResolver
-        )
-        appActivationPolicyController = AppActivationPolicyController()
         _settingsStore = StateObject(wrappedValue: settingsStore)
         _controller = StateObject(wrappedValue: controller)
         diagnosticsEventRecorder = DiagnosticsEventRecorder(controller: controller)
@@ -30,10 +23,7 @@ struct ReconApp: App {
         let _ = diagnosticsEventRecorder
 
         MenuBarExtra {
-            ReconMenuView(
-                controller: controller,
-                appActivationPolicyController: appActivationPolicyController
-            )
+            ReconMenuView(controller: controller)
         } label: {
             Text(controller.statusItemTitle)
                 .font(.system(size: 13, weight: .semibold, design: .monospaced))
@@ -46,8 +36,7 @@ struct ReconApp: App {
         Window("Recon — Preferences", id: AppWindowID.preferences) {
             PreferencesWindowView(
                 controller: controller,
-                settingsStore: settingsStore,
-                browserConfigService: browserConfigService
+                settingsStore: settingsStore
             )
         }
         .defaultSize(width: 500, height: 400)
@@ -58,16 +47,6 @@ struct ReconApp: App {
         }
         .defaultSize(width: 560, height: 520)
         .windowResizability(.contentSize)
-
-        Window("Recon - Deck", id: AppWindowID.cluster) {
-            ClusterBrowserWindowSceneView(
-                settingsStore: settingsStore,
-                browserConfigService: browserConfigService,
-                appActivationPolicyController: appActivationPolicyController
-            )
-        }
-        .defaultSize(width: 960, height: 700)
-        .windowResizability(.contentMinSize)
     }
 }
 

@@ -32,9 +32,7 @@ struct PreferencesWindowView: View {
 
     @ObservedObject var controller: TelepresenceController
     @ObservedObject var settingsStore: AppSettingsStore
-    let browserConfigService: BrowserConfigService
     @State private var selectedTab: Tab = .general
-    @State private var browserSourceStatuses: [BrowserSourceStatus] = []
 
     var body: some View {
         VStack(spacing: 0) {
@@ -289,26 +287,6 @@ struct PreferencesWindowView: View {
                 }
             }
 
-            PreferencesSection(
-                title: "DECK",
-                topPadding: 20,
-                hintText: "These kubeconfig files are only used by Deck. They do not reconnect Telepresence."
-            ) {
-                PreferencesCard {
-                    BrowserSourceListRow(
-                        sources: browserSourceStatuses,
-                        removeSource: removeBrowserSource
-                    )
-
-                    PreferencesInsetDivider()
-
-                    PreferenceControlRow(title: "Deck sources") {
-                        Button("Add Files", action: addBrowserSources)
-                            .buttonStyle(.bordered)
-                    }
-                }
-            }
-
             PreferencesSection(title: "LOGS", topPadding: 20) {
                 PreferencesCard {
                     LogDirectoryRow(
@@ -321,9 +299,6 @@ struct PreferencesWindowView: View {
             settingsMessage
                 .padding(.top, 12)
         }
-        .task(id: settingsStore.browserKubeconfigPaths) {
-            browserSourceStatuses = await browserConfigService.loadContextCatalog().sourceStatuses
-        }
     }
 
     @ViewBuilder
@@ -334,37 +309,6 @@ struct PreferencesWindowView: View {
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
-    }
-
-    private func addBrowserSources() {
-        let panel = NSOpenPanel()
-        panel.canChooseFiles = true
-        panel.canChooseDirectories = false
-        panel.allowsMultipleSelection = true
-        panel.directoryURL = preferredBrowserKubeconfigDirectoryURL()
-
-        if panel.runModal() == .OK {
-            let selectedPaths = panel.urls.map(\.path)
-            let updatedPaths = Array(Set(settingsStore.browserKubeconfigPaths + selectedPaths)).sorted()
-            settingsStore.setBrowserKubeconfigPaths(updatedPaths)
-        }
-    }
-
-    private func removeBrowserSource(_ path: String) {
-        let updatedPaths = settingsStore.browserKubeconfigPaths.filter { $0 != path }
-        settingsStore.setBrowserKubeconfigPaths(updatedPaths)
-    }
-
-    private func preferredBrowserKubeconfigDirectoryURL() -> URL {
-        if let existingPath = settingsStore.browserKubeconfigPaths.first {
-            return URL(fileURLWithPath: existingPath).deletingLastPathComponent()
-        }
-
-        if let selectedKubeconfigPath = controller.selectedKubeconfigPath {
-            return URL(fileURLWithPath: selectedKubeconfigPath).deletingLastPathComponent()
-        }
-
-        return FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".kube", isDirectory: true)
     }
 }
 
@@ -591,54 +535,6 @@ private struct LogDirectoryRow: View {
     }
 }
 
-private struct BrowserSourceListRow: View {
-    let sources: [BrowserSourceStatus]
-    let removeSource: (String) -> Void
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            if sources.isEmpty {
-                Text("No browser kubeconfig files configured.")
-                    .font(.system(size: 11, weight: .regular))
-                    .foregroundStyle(Color(nsColor: .tertiaryLabelColor))
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 10)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            } else {
-                ForEach(Array(sources.enumerated()), id: \.element.id) { index, source in
-                    HStack(alignment: .center, spacing: 12) {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(source.displayPath)
-                                .font(.system(size: 11, weight: .regular, design: .monospaced))
-                                .foregroundStyle(Color(nsColor: .secondaryLabelColor))
-                                .lineLimit(2)
-
-                            Text(source.errorMessage ?? source.statusText)
-                                .font(.system(size: 10, weight: .regular))
-                                .foregroundStyle(source.isValid ? Color(nsColor: .tertiaryLabelColor) : .orange)
-                                .lineLimit(2)
-                        }
-
-                        Spacer(minLength: 12)
-
-                        Button("Remove") {
-                            removeSource(source.path)
-                        }
-                        .buttonStyle(.bordered)
-                        .controlSize(.small)
-                    }
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 7)
-                    .frame(maxWidth: .infinity, minHeight: 52, alignment: .leading)
-
-                    if index < sources.count - 1 {
-                        PreferencesInsetDivider()
-                    }
-                }
-            }
-        }
-    }
-}
 private struct PreferencesWindowConfigurator: NSViewRepresentable {
     func makeNSView(context: Context) -> NSView {
         let view = NSView(frame: .zero)
