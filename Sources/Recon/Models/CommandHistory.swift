@@ -7,7 +7,6 @@ enum CommandHistorySource: String, CaseIterable, Sendable {
     case diagnostics
     case telepresenceAction = "telepresence-action"
     case kubeTargetResolution = "kube-target-resolution"
-    case clusterBrowser = "cluster-browser"
     case namespaceDiscovery = "namespace-discovery"
     case environmentProbe = "environment-probe"
     case appInstall = "app-install"
@@ -26,8 +25,6 @@ enum CommandHistorySource: String, CaseIterable, Sendable {
             return "Telepresence"
         case .kubeTargetResolution:
             return "Kube Target"
-        case .clusterBrowser:
-            return "Deck"
         case .namespaceDiscovery:
             return "Namespace Discovery"
         case .environmentProbe:

@@ -14,12 +14,6 @@ struct PersistedAppSettings: Codable, Equatable {
     var rememberedKubeconfigPaths: [String]
     var namespaceOverridesByContext: [String: String]
     var recentNamespacesByContext: [String: [String]]
-    var browserKubeconfigPaths: [String]
-    var browserHasExplicitKubeconfigSources: Bool
-    var browserLastSelectedContextID: String?
-    var browserSelectedNamespacesByContextID: [String: String]
-    var browserRecentNamespacesByContextID: [String: [String]]
-    var browserHiddenNamespacesByContextID: [String: [String]]
     var notificationToggles: [String: Bool]
     var appUpdateSectionDismissed: Bool
 
@@ -35,12 +29,6 @@ struct PersistedAppSettings: Codable, Equatable {
         rememberedKubeconfigPaths: [String] = [],
         namespaceOverridesByContext: [String: String] = [:],
         recentNamespacesByContext: [String: [String]] = [:],
-        browserKubeconfigPaths: [String] = [],
-        browserHasExplicitKubeconfigSources: Bool = false,
-        browserLastSelectedContextID: String? = nil,
-        browserSelectedNamespacesByContextID: [String: String] = [:],
-        browserRecentNamespacesByContextID: [String: [String]] = [:],
-        browserHiddenNamespacesByContextID: [String: [String]] = [:],
         notificationToggles: [String: Bool] = [:],
         appUpdateSectionDismissed: Bool = false
     ) {
@@ -55,12 +43,6 @@ struct PersistedAppSettings: Codable, Equatable {
         self.rememberedKubeconfigPaths = rememberedKubeconfigPaths
         self.namespaceOverridesByContext = namespaceOverridesByContext
         self.recentNamespacesByContext = recentNamespacesByContext
-        self.browserKubeconfigPaths = browserKubeconfigPaths
-        self.browserHasExplicitKubeconfigSources = browserHasExplicitKubeconfigSources
-        self.browserLastSelectedContextID = browserLastSelectedContextID
-        self.browserSelectedNamespacesByContextID = browserSelectedNamespacesByContextID
-        self.browserRecentNamespacesByContextID = browserRecentNamespacesByContextID
-        self.browserHiddenNamespacesByContextID = browserHiddenNamespacesByContextID
         self.notificationToggles = notificationToggles
         self.appUpdateSectionDismissed = appUpdateSectionDismissed
     }
@@ -78,12 +60,6 @@ struct PersistedAppSettings: Codable, Equatable {
         rememberedKubeconfigPaths = try container.decodeIfPresent([String].self, forKey: .rememberedKubeconfigPaths) ?? []
         namespaceOverridesByContext = try container.decodeIfPresent([String: String].self, forKey: .namespaceOverridesByContext) ?? [:]
         recentNamespacesByContext = try container.decodeIfPresent([String: [String]].self, forKey: .recentNamespacesByContext) ?? [:]
-        browserKubeconfigPaths = try container.decodeIfPresent([String].self, forKey: .browserKubeconfigPaths) ?? []
-        browserHasExplicitKubeconfigSources = try container.decodeIfPresent(Bool.self, forKey: .browserHasExplicitKubeconfigSources) ?? false
-        browserLastSelectedContextID = try container.decodeIfPresent(String.self, forKey: .browserLastSelectedContextID)
-        browserSelectedNamespacesByContextID = try container.decodeIfPresent([String: String].self, forKey: .browserSelectedNamespacesByContextID) ?? [:]
-        browserRecentNamespacesByContextID = try container.decodeIfPresent([String: [String]].self, forKey: .browserRecentNamespacesByContextID) ?? [:]
-        browserHiddenNamespacesByContextID = try container.decodeIfPresent([String: [String]].self, forKey: .browserHiddenNamespacesByContextID) ?? [:]
         notificationToggles = try container.decodeIfPresent([String: Bool].self, forKey: .notificationToggles) ?? [:]
         appUpdateSectionDismissed = try container.decodeIfPresent(Bool.self, forKey: .appUpdateSectionDismissed) ?? false
     }
@@ -199,12 +175,6 @@ struct AppSettingsFileStore {
             rememberedKubeconfigPaths: defaults.stringArray(forKey: LegacyDefaultsKey.rememberedKubeconfigPaths) ?? [],
             namespaceOverridesByContext: defaults.dictionary(forKey: LegacyDefaultsKey.namespaceOverridesByContext) as? [String: String] ?? [:],
             recentNamespacesByContext: defaults.dictionary(forKey: LegacyDefaultsKey.recentNamespacesByContext) as? [String: [String]] ?? [:],
-            browserKubeconfigPaths: defaults.stringArray(forKey: LegacyDefaultsKey.browserKubeconfigPaths) ?? [],
-            browserHasExplicitKubeconfigSources: defaults.object(forKey: LegacyDefaultsKey.browserHasExplicitKubeconfigSources) as? Bool ?? false,
-            browserLastSelectedContextID: defaults.string(forKey: LegacyDefaultsKey.browserLastSelectedContextID),
-            browserSelectedNamespacesByContextID: defaults.dictionary(forKey: LegacyDefaultsKey.browserSelectedNamespacesByContextID) as? [String: String] ?? [:],
-            browserRecentNamespacesByContextID: defaults.dictionary(forKey: LegacyDefaultsKey.browserRecentNamespacesByContextID) as? [String: [String]] ?? [:],
-            browserHiddenNamespacesByContextID: defaults.dictionary(forKey: LegacyDefaultsKey.browserHiddenNamespacesByContextID) as? [String: [String]] ?? [:],
             notificationToggles: loadLegacyNotificationToggles(),
             appUpdateSectionDismissed: defaults.object(forKey: LegacyDefaultsKey.appUpdateSectionDismissed) as? Bool ?? false
         )

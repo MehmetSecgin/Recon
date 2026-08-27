@@ -182,14 +182,14 @@ struct CommandHistoryHarness {
             let output = try await ProcessRunner.run(
                 executable: "/bin/sh",
                 arguments: ["-c", "printf 'ok'"],
-                metadata: ProcessRunMetadata(source: .clusterBrowser, context: "ctx", namespace: "ns")
+                metadata: ProcessRunMetadata(source: .telepresenceAction, context: "ctx", namespace: "ns")
             )
 
             try expect(output.exitCode == 0, "Success command should exit 0")
             let detail = try require(try await store.detail(id: 1), "Expected success log row")
             try expect(detail.resultState == .success, "Successful command should log success")
             try expect(detail.stdout == "ok", "stdout should be captured")
-            try expect(detail.source == .clusterBrowser, "Metadata source should persist")
+            try expect(detail.source == .telepresenceAction, "Metadata source should persist")
             try expect(detail.context == "ctx", "Metadata context should persist")
             try expect(detail.namespace == "ns", "Metadata namespace should persist")
         }
@@ -338,7 +338,7 @@ struct CommandHistoryHarness {
                 finishedAt: Date(timeIntervalSince1970: 1_099_001),
                 executable: "/usr/bin/kubectl",
                 arguments: ["get", "configmaps", "-o", "json"],
-                source: .clusterBrowser,
+                source: .telepresenceAction,
                 resultState: .success,
                 exitCode: 0,
                 stdout: rawOutput,
@@ -454,7 +454,7 @@ struct CommandHistoryHarness {
                 finishedAt: Date(timeIntervalSince1970: 1_449_001),
                 executable: "/usr/bin/kubectl",
                 arguments: ["get", "pods", "-o", "json"],
-                source: .clusterBrowser,
+                source: .telepresenceAction,
                 resultState: .success,
                 exitCode: 0,
                 stdout: hugeJSON,
@@ -511,10 +511,10 @@ struct CommandHistoryHarness {
 
     @MainActor
     private static func testRowExpansionLoadsDetailLazily() async throws {
-        let summary = makeSummary(id: 7, source: .clusterBrowser)
+        let summary = makeSummary(id: 7, source: .telepresenceAction)
         let commandStore = FakeCommandStore(
             summaries: [summary],
-            details: [7: makeDetail(id: 7, source: .clusterBrowser)]
+            details: [7: makeDetail(id: 7, source: .telepresenceAction)]
         )
         let viewModel = makeDiagnosticsViewModel(commandStore: commandStore)
 

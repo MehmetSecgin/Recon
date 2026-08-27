@@ -5,7 +5,6 @@ import Foundation
 struct AppSettingsStoreHarness {
     static func main() throws {
         try testLegacyDefaultsMigrateIntoSettingsFile()
-        try testHiddenNamespacesPersistAcrossReload()
         try testSettingsFileWinsOverLegacyDefaults()
         try testCorruptSettingsFileFallsBackSafely()
 
@@ -59,10 +58,6 @@ struct AppSettingsStoreHarness {
         try expect(store.pollingInterval == .thirtySeconds, "Polling interval should migrate from legacy defaults")
         try expect(store.telepresencePathOverride == standardizedPath("/tmp/../tmp/telepresence"), "Migrated paths should be normalized")
         try expect(store.selectedKubeconfigPath == standardizedPath("/tmp/../tmp/config-a"), "Pinned kubeconfig should migrate")
-        try expect(store.browserSelectedNamespace(for: "source-a#qa") == "payments", "Browser namespace selections should migrate")
-        try expect(store.browserRecentNamespaces(for: "source-a#qa") == ["payments", "default"], "Recent namespaces should de-duplicate during migration")
-        try expect(store.browserHiddenNamespaces(for: "source-a#qa") == ["hidden-a", "hidden-b"], "Hidden namespaces should migrate and de-duplicate")
-        try expect(store.hasExplicitBrowserKubeconfigSources, "Explicit browser source selection should migrate")
         try expect(store.isNotificationEnabled(for: .connectionDropped), "Per-event notification settings should migrate")
         try expect(defaults.object(forKey: LegacyDefaultsKey.browserHiddenNamespacesByContextID) == nil, "Legacy defaults should be cleared after migration")
         try expect(defaults.object(forKey: LegacyDefaultsKey.autoReconnectEnabled) == nil, "Legacy scalar defaults should be cleared after migration")
@@ -70,35 +65,7 @@ struct AppSettingsStoreHarness {
         let (reloadedDefaults, reloadedSuiteName) = makeDefaults()
         defer { cleanupDefaults(reloadedDefaults, suiteName: reloadedSuiteName) }
         let reloaded = makeStore(settingsURL: settingsURL, defaults: reloadedDefaults)
-        try expect(reloaded.browserHiddenNamespaces(for: "source-a#qa") == ["hidden-a", "hidden-b"], "Reload should come from the settings file")
         try expect(reloaded.autoReconnectEnabled, "Reloaded state should come from the settings file")
-    }
-
-    private static func testHiddenNamespacesPersistAcrossReload() throws {
-        let (defaults, suiteName) = makeDefaults()
-        let settingsURL = try makeSettingsURL()
-        defer { cleanup(settingsURL: settingsURL, defaults: defaults, suiteName: suiteName) }
-
-        let store = makeStore(settingsURL: settingsURL, defaults: defaults)
-        store.setBrowserNamespaceHidden(true, namespace: "payments", for: "ctx#qa")
-        store.setBrowserNamespaceHidden(true, namespace: "ops", for: "ctx#qa")
-        store.setBrowserNamespaceHidden(false, namespace: "payments", for: "ctx#qa")
-
-        let reloaded = makeStore(settingsURL: settingsURL, defaults: defaults)
-        try expect(reloaded.browserHiddenNamespaces(for: "ctx#qa") == ["ops"], "Hidden namespace edits should survive reloads")
-
-        reloaded.setBrowserHiddenNamespaces(["default", "prod"], for: "ctx#qa")
-        let reloadedAgain = makeStore(settingsURL: settingsURL, defaults: defaults)
-        try expect(Set(reloadedAgain.browserHiddenNamespaces(for: "ctx#qa")) == Set(["default", "prod"]), "Bulk hidden namespace updates should persist")
-
-        let manyHiddenNamespaces = (0..<25).map { "ns-\($0)" }
-        reloadedAgain.setBrowserHiddenNamespaces(manyHiddenNamespaces, for: "ctx#wide")
-        let reloadedWide = makeStore(settingsURL: settingsURL, defaults: defaults)
-        try expect(
-            Set(reloadedWide.browserHiddenNamespaces(for: "ctx#wide")) == Set(manyHiddenNamespaces) &&
-            reloadedWide.browserHiddenNamespaces(for: "ctx#wide").count == manyHiddenNamespaces.count,
-            "Reload should preserve more than ten hidden namespaces per context"
-        )
     }
 
     private static func testSettingsFileWinsOverLegacyDefaults() throws {
@@ -108,16 +75,13 @@ struct AppSettingsStoreHarness {
 
         let initialStore = makeStore(settingsURL: settingsURL, defaults: initialDefaults)
         initialStore.setAutoReconnectEnabled(true)
-        initialStore.setBrowserNamespaceHidden(true, namespace: "kept", for: "ctx#stg")
 
         let (conflictingDefaults, conflictingSuiteName) = makeDefaults()
         conflictingDefaults.set(false, forKey: LegacyDefaultsKey.autoReconnectEnabled)
-        conflictingDefaults.set(["ctx#stg": ["legacy-only"]], forKey: LegacyDefaultsKey.browserHiddenNamespacesByContextID)
         defer { cleanupDefaults(conflictingDefaults, suiteName: conflictingSuiteName) }
 
         let reloaded = makeStore(settingsURL: settingsURL, defaults: conflictingDefaults)
         try expect(reloaded.autoReconnectEnabled, "Existing settings file should take precedence over legacy defaults")
-        try expect(reloaded.browserHiddenNamespaces(for: "ctx#stg") == ["kept"], "Hidden namespaces should come from the settings file when it exists")
     }
 
     private static func testCorruptSettingsFileFallsBackSafely() throws {
@@ -135,7 +99,6 @@ struct AppSettingsStoreHarness {
 
         let store = makeStore(settingsURL: settingsURL, defaults: defaults)
         try expect(store.autoReconnectEnabled == false, "Corrupt settings files should not silently fall back to legacy defaults")
-        try expect(store.browserHiddenNamespaces(for: "missing").isEmpty, "Corrupt settings files should fall back to safe empty browser state")
     }
 
     private static func makeStore(settingsURL: URL, defaults: UserDefaults) -> AppSettingsStore {
